@@ -1,0 +1,2 @@
+# Local-only overrides for wrangler dev if you need them later.
+# Copy to apps/api/.dev.vars and keep that file untracked.

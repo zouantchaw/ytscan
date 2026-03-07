@@ -1,0 +1,16 @@
+{
+  "name": "@ytscan/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --remote",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ytscan/core": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250224.0"
+  }
+}

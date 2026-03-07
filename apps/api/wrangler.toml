@@ -1,0 +1,23 @@
+name = "ytscan-api"
+main = "src/worker.ts"
+compatibility_date = "2026-03-07"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ytscan"
+database_id = "36bf8776-0131-4eea-9e7b-b081856799bb"
+migrations_dir = "../../infrastructure/d1/migrations"
+
+[[vectorize]]
+binding = "TRANSCRIPTS_INDEX"
+index_name = "ytscan-transcripts"
+
+[ai]
+binding = "AI"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "ytscan-assets-wiel"
+
+[vars]
+DEFAULT_CHANNEL_SLUG = "codie-sanchez"

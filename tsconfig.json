@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@ytscan/core": ["packages/core/src/index.ts"]
+    }
+  },
+  "include": [],
+  "references": [
+    { "path": "./apps/api" },
+    { "path": "./packages/core" },
+    { "path": "./packages/scripts" }
+  ]
+}
