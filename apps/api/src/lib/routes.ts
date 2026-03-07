@@ -397,7 +397,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
   try {
     if (pathname.startsWith("/api/auth")) {
-      return withCors(await createAuth(env).handler(request), request, env);
+      return withCors(await createAuth(env, request).handler(request), request, env);
     }
 
     if (pathname === "/" || pathname === "/health") {

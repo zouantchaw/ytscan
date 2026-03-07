@@ -162,7 +162,7 @@ export async function getRequestContext(
   request: Request,
   env: Env
 ): Promise<RequestContext | null> {
-  const auth = createAuth(env);
+  const auth = createAuth(env, request);
   const session = await auth.api.getSession({
     headers: request.headers,
   });

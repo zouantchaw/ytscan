@@ -22,7 +22,20 @@ function uniqueOrigins(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
-export function getAllowedOrigins(env: Env): string[] {
+function getRequestOrigin(request?: Request): string | null {
+  if (!request) return null;
+
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+
+  if (forwardedHost) {
+    return `${forwardedProto || "https"}://${forwardedHost}`;
+  }
+
+  return parseOrigin(request.url);
+}
+
+export function getAllowedOrigins(env: Env, request?: Request): string[] {
   const configuredOrigins =
     env.ALLOWED_ORIGINS?.split(",")
       .map((origin) => parseOrigin(origin.trim()))
@@ -31,12 +44,17 @@ export function getAllowedOrigins(env: Env): string[] {
   return uniqueOrigins([
     ...DEFAULT_DEV_ORIGINS,
     ...configuredOrigins,
+    getRequestOrigin(request),
     parseOrigin(env.BETTER_AUTH_URL ?? ""),
   ]);
 }
 
-function getBaseUrl(env: Env): string {
-  return env.BETTER_AUTH_URL?.trim() || "http://127.0.0.1:8787";
+function getBaseUrl(env: Env, request?: Request): string {
+  return (
+    getRequestOrigin(request) ??
+    env.BETTER_AUTH_URL?.trim() ??
+    "http://127.0.0.1:8787"
+  );
 }
 
 function getSenderIdentity(env: Env): string {
@@ -66,7 +84,7 @@ function buildMagicLinkEmail(url: string): { html: string; text: string } {
   };
 }
 
-export function createAuth(env: Env) {
+export function createAuth(env: Env, request?: Request) {
   const processEnv = (
     globalThis as typeof globalThis & {
       process?: {
@@ -84,17 +102,18 @@ export function createAuth(env: Env) {
   }
 
   const resend = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
+  const baseUrl = getBaseUrl(env, request);
 
   return betterAuth({
     advanced: {
       ipAddress: {
         ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for"],
       },
-      useSecureCookies: getBaseUrl(env).startsWith("https://"),
+      useSecureCookies: baseUrl.startsWith("https://"),
     },
     appName: "YTScan",
     basePath: "/api/auth",
-    baseURL: getBaseUrl(env),
+    baseURL: baseUrl,
     database: env.DB,
     emailAndPassword: {
       enabled: false,
@@ -120,7 +139,7 @@ export function createAuth(env: Env) {
       }),
     ],
     secret: env.BETTER_AUTH_SECRET,
-    trustedOrigins: getAllowedOrigins(env),
+    trustedOrigins: getAllowedOrigins(env, request),
   });
 }
 
