@@ -24,6 +24,7 @@ type InfoJson = {
   comment_count?: number;
   description?: string;
   tags?: string[];
+  channel_follower_count?: number;
 };
 
 type SrtEntry = {
@@ -87,6 +88,60 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizeUploadDate(value: string | undefined): string {
+  const normalized = (value ?? "").trim();
+  if (/^\d{8}$/.test(normalized)) {
+    return `${normalized.slice(0, 4)}-${normalized.slice(4, 6)}-${normalized.slice(6, 8)}`;
+  }
+  return normalized;
+}
+
+function stripCaptionNoise(value: string): string {
+  return value
+    .replace(/\[(?:music|applause|laughter|__+)\]/gi, " ")
+    .replace(/♪+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeRepeatedPhrases(text: string): string {
+  const words = normalizeWhitespace(text).split(" ").filter(Boolean);
+  if (words.length === 0) return "";
+
+  const result: string[] = [];
+  let index = 0;
+
+  while (index < words.length) {
+    let matched = false;
+
+    for (let size = 12; size >= 4; size -= 1) {
+      const current = words.slice(index, index + size);
+      const next = words.slice(index + size, index + size * 2);
+      if (current.length !== size || next.length !== size) continue;
+
+      const currentPhrase = current.join(" ").toLowerCase();
+      const nextPhrase = next.join(" ").toLowerCase();
+      if (currentPhrase !== nextPhrase) continue;
+
+      result.push(...current);
+      index += size * 2;
+      matched = true;
+      break;
+    }
+
+    if (matched) continue;
+
+    result.push(words[index] ?? "");
+    index += 1;
+  }
+
+  return normalizeWhitespace(result.join(" "));
+}
+
+function sanitizeTranscriptText(value: string): string {
+  return dedupeRepeatedPhrases(stripCaptionNoise(value));
+}
+
 function timestampToSeconds(value: string): number {
   const match = value.match(/(\d+):(\d+):(\d+),(\d+)/);
   if (!match) return 0;
@@ -105,7 +160,7 @@ function parseSrt(text: string): SrtEntry[] {
     if (!timestampLine) continue;
     const [startRaw, endRaw] = timestampLine.split("-->").map((value) => value.trim());
     const payload = lines.slice(lines.indexOf(timestampLine) + 1).join(" ");
-    const normalizedText = normalizeWhitespace(payload);
+    const normalizedText = sanitizeTranscriptText(payload);
     if (!normalizedText) continue;
     entries.push({
       startTime: timestampToSeconds(startRaw),
@@ -177,6 +232,14 @@ function toPosixRelative(targetPath: string): string {
   return path.relative(MONOREPO_ROOT, targetPath).split(path.sep).join("/");
 }
 
+function pickPreferredFile(files: string[], predicates: Array<(fileName: string) => boolean>): string | undefined {
+  for (const predicate of predicates) {
+    const match = files.find(predicate);
+    if (match) return match;
+  }
+  return undefined;
+}
+
 function computePerformanceTiers(videos: Array<{ youtubeId: string; viewCount: number }>): Map<string, string> {
   const sorted = [...videos].sort((left, right) => right.viewCount - left.viewCount);
   const viralCount = Math.max(1, Math.ceil(sorted.length * 0.1));
@@ -215,7 +278,11 @@ function buildChunks(
 
   const flushChunk = () => {
     if (currentWords.length === 0) return;
-    const text = currentWords.join(" ").trim();
+    const text = sanitizeTranscriptText(currentWords.join(" "));
+    if (!text) {
+      currentWords = [];
+      return;
+    }
     chunks.push({
       vectorId: `${youtubeId}:${chunkIndex}`,
       youtubeId,
@@ -373,29 +440,46 @@ async function main(): Promise<void> {
     .map((entry) => path.join(sourceRoot, entry.name));
 
   const channelMetaDir = directories.find((directory) => path.basename(directory).startsWith("NA - "));
-  if (!channelMetaDir) {
-    throw new Error(`Could not find channel metadata directory in ${sourceRoot}`);
-  }
+  const standaloneChannelMetaPath = path.join(sourceRoot, "channel.info.json");
+  const channelMeta = (() => {
+    if (channelMetaDir) {
+      const channelMetaFile = fs
+        .readdirSync(channelMetaDir)
+        .find((entry) => entry.endsWith(".info.json"));
+      if (!channelMetaFile) {
+        throw new Error(`Could not find channel metadata JSON in ${channelMetaDir}`);
+      }
+      return JSON.parse(
+        fs.readFileSync(path.join(channelMetaDir, channelMetaFile), "utf-8")
+      ) as Record<string, unknown>;
+    }
 
-  const channelMetaFile = fs
-    .readdirSync(channelMetaDir)
-    .find((entry) => entry.endsWith(".info.json"));
-  if (!channelMetaFile) {
-    throw new Error(`Could not find channel metadata JSON in ${channelMetaDir}`);
-  }
+    if (fs.existsSync(standaloneChannelMetaPath)) {
+      return JSON.parse(fs.readFileSync(standaloneChannelMetaPath, "utf-8")) as Record<string, unknown>;
+    }
 
-  const channelMeta = JSON.parse(
-    fs.readFileSync(path.join(channelMetaDir, channelMetaFile), "utf-8")
-  ) as Record<string, unknown>;
+    return null;
+  })();
 
   const videoDirs = directories.filter((directory) => directory !== channelMetaDir).sort();
   const infoRecords = videoDirs.map((directory) => {
     const files = fs.readdirSync(directory);
     const infoFile = files.find((entry) => entry.endsWith(".info.json"));
-    const srtFile = files.find((entry) => entry.endsWith(".en.srt"));
-    const webpFile = files.find((entry) => entry.endsWith(".webp"));
+    const srtFile = pickPreferredFile(files, [
+      (entry) => entry.endsWith(".en.srt"),
+      (entry) => entry.endsWith(".en-orig.srt"),
+      (entry) => entry.endsWith(".en-en.srt"),
+      (entry) => entry.includes(".en-") && entry.endsWith(".srt"),
+      (entry) => entry.endsWith(".srt"),
+    ]);
+    const thumbnailFile = pickPreferredFile(files, [
+      (entry) => entry.endsWith(".webp"),
+      (entry) => entry.endsWith(".jpg"),
+      (entry) => entry.endsWith(".jpeg"),
+      (entry) => entry.endsWith(".png"),
+    ]);
 
-    if (!infoFile || !srtFile || !webpFile) {
+    if (!infoFile || !srtFile || !thumbnailFile) {
       throw new Error(`Missing required files in ${directory}`);
     }
 
@@ -404,7 +488,7 @@ async function main(): Promise<void> {
       directory,
       info,
       srtPath: path.join(directory, srtFile),
-      thumbnailPath: path.join(directory, webpFile),
+      thumbnailPath: path.join(directory, thumbnailFile),
     };
   });
 
@@ -419,13 +503,14 @@ async function main(): Promise<void> {
     const entries = parseSrt(fs.readFileSync(srtPath, "utf-8"));
     const segments = dedupeRollingCaptions(entries);
     const hookSegments = segments.filter((segment) => segment.startTime < 60);
-    const hookText = normalizeWhitespace(hookSegments.map((segment) => segment.text).join(" "));
+    const uploadDate = normalizeUploadDate(info.upload_date);
+    const hookText = sanitizeTranscriptText(hookSegments.map((segment) => segment.text).join(" "));
     const hookWordCount = splitWords(hookText).length;
     const performanceTier = performanceTiers.get(info.id) ?? "average";
     const chunks = buildChunks(
       info.id,
       info.title,
-      info.upload_date ?? "",
+      uploadDate,
       info.view_count ?? 0,
       performanceTier,
       segments
@@ -434,7 +519,7 @@ async function main(): Promise<void> {
     return {
       youtubeId: info.id,
       title: info.title,
-      uploadDate: info.upload_date ?? "",
+      uploadDate,
       durationSec: info.duration ?? 0,
       viewCount: info.view_count ?? 0,
       likeCount: info.like_count ?? 0,
@@ -456,10 +541,26 @@ async function main(): Promise<void> {
     };
   });
 
-  const channelName = String(channelMeta.channel ?? channelMeta.title ?? "Unknown channel");
-  const channelUrl = String(channelMeta.webpage_url ?? channelMeta.channel_url ?? "");
-  const channelYoutubeId = channelMeta.channel_id ? String(channelMeta.channel_id) : null;
-  const subscriberCount = channelMeta.channel_follower_count ? Number(channelMeta.channel_follower_count) : null;
+  const fallbackInfo = infoRecords[0]?.info;
+  if (!fallbackInfo) {
+    throw new Error(`No video records found in ${sourceRoot}`);
+  }
+
+  const channelName = String(
+    channelMeta?.channel ?? channelMeta?.title ?? fallbackInfo.channel ?? "Unknown channel"
+  );
+  const channelUrl = String(
+    channelMeta?.webpage_url ?? channelMeta?.channel_url ?? fallbackInfo.channel_url ?? ""
+  );
+  const channelYoutubeId = channelMeta?.channel_id
+    ? String(channelMeta.channel_id)
+    : fallbackInfo.channel_id ?? null;
+  const subscriberCount =
+    typeof channelMeta?.channel_follower_count === "number"
+      ? Number(channelMeta.channel_follower_count)
+      : typeof fallbackInfo.channel_follower_count === "number"
+        ? Number(fallbackInfo.channel_follower_count)
+        : null;
   const scanDate = new Date().toISOString();
 
   const seedSqlPath = path.join(outputRoot, `${channelSlug}.seed.sql`);

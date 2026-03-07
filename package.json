@@ -11,8 +11,9 @@
     "dev": "npm run dev --workspace=apps/api",
     "deploy": "npm run deploy --workspace=apps/api",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "build:artifacts": "npm run build:artifacts --workspace=@ytscan/scripts",
-    "vectorize:upsert": "npm run vectorize:upsert --workspace=@ytscan/scripts"
+    "build:artifacts": "npm run build:artifacts --workspace=@ytscan/scripts --",
+    "vectorize:upsert": "npm run vectorize:upsert --workspace=@ytscan/scripts --",
+    "scan:run": "npm run scan:run --workspace=@ytscan/scripts --"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

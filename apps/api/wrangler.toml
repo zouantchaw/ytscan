@@ -1,6 +1,7 @@
 name = "ytscan-api"
 main = "src/worker.ts"
 compatibility_date = "2026-03-07"
+compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
@@ -20,4 +21,8 @@ binding = "ASSETS"
 bucket_name = "ytscan-assets-wiel"
 
 [vars]
+BETTER_AUTH_URL = "https://ytscan-api.wiel.workers.dev"
 DEFAULT_CHANNEL_SLUG = "codie-sanchez"
+ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+RESEND_FROM_EMAIL = "onboarding@resend.dev"
+RESEND_FROM_NAME = "YTScan"

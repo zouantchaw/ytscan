@@ -8,9 +8,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ytscan/core": "*"
+    "@ytscan/core": "*",
+    "better-auth": "^1.5.4",
+    "kysely-d1": "^0.4.0",
+    "resend": "^6.9.3"
   },
   "devDependencies": {
+    "@better-auth/cli": "^1.4.21",
     "@cloudflare/workers-types": "^4.20250224.0"
   }
 }

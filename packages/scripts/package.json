@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build:artifacts": "tsx src/ingest/build-channel-artifacts.ts",
-    "vectorize:upsert": "tsx src/vectorize/upsert-transcript-chunks.ts"
+    "vectorize:upsert": "tsx src/vectorize/upsert-transcript-chunks.ts",
+    "scan:run": "tsx src/scan/run-scan-jobs.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

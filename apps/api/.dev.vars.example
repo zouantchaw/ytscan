@@ -1,2 +1,9 @@
 # Local-only overrides for wrangler dev if you need them later.
 # Copy to apps/api/.dev.vars and keep that file untracked.
+BETTER_AUTH_SECRET=
+BETTER_AUTH_URL=http://127.0.0.1:8787
+ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=onboarding@resend.dev
+RESEND_FROM_NAME=YTScan
+INTERNAL_RUNNER_TOKEN=
