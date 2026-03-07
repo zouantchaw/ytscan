@@ -222,3 +222,123 @@ export type MeResponse = {
   user: AuthenticatedUser;
   workspace: WorkspaceSummary;
 };
+
+export type JsonObject = Record<string, unknown>;
+
+export type ScriptLabStep =
+  | "hooks"
+  | "outline"
+  | "script"
+  | "director_notes"
+  | "thumbnail_brief"
+  | "previs";
+
+export type ScriptResearchItem = {
+  id: string;
+  itemType: string;
+  sourceChannelSlug: string | null;
+  sourceYoutubeId: string | null;
+  sourceVectorId: string | null;
+  title: string | null;
+  excerpt: string | null;
+  score: number | null;
+  metadata: JsonObject;
+  createdAt: string;
+};
+
+export type ScriptOutputVersion = {
+  id: string;
+  step: ScriptLabStep | string;
+  version: number;
+  modelKey: string | null;
+  content: string;
+  metadata: JsonObject;
+  createdByUserId: string | null;
+  createdAt: string;
+};
+
+export type ThumbnailBriefVersion = {
+  id: string;
+  version: number;
+  content: string;
+  metadata: JsonObject;
+  createdAt: string;
+};
+
+export type GenerationJobSummary = {
+  id: string;
+  projectId: string | null;
+  personaModelId: string | null;
+  jobType: string;
+  provider: string;
+  providerJobId: string | null;
+  status: string;
+  progress: number;
+  input: JsonObject;
+  output: JsonObject;
+  errorMessage: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScriptProjectSummary = {
+  id: string;
+  title: string;
+  topic: string;
+  status: string;
+  channelSlug: string | null;
+  channelName: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  researchItemCount: number;
+  latestOutputStep: string | null;
+  latestOutputVersion: number | null;
+};
+
+export type ScriptProjectDetail = ScriptProjectSummary & {
+  researchItems: ScriptResearchItem[];
+  outputs: ScriptOutputVersion[];
+  thumbnailBriefs: ThumbnailBriefVersion[];
+  generationJobs: GenerationJobSummary[];
+};
+
+export type ScriptProjectListResponse = {
+  items: ScriptProjectSummary[];
+  count: number;
+};
+
+export type ScriptProjectResponse = {
+  project: ScriptProjectDetail;
+};
+
+export type PersonaModelSummary = {
+  id: string;
+  channelSlug: string | null;
+  channelName: string | null;
+  status: string;
+  provider: string;
+  providerJobId: string | null;
+  baseModel: string;
+  adapterPath: string | null;
+  datasetPath: string | null;
+  datasetExamples: number;
+  metadata: JsonObject;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PersonaModelDetail = PersonaModelSummary & {
+  generationJobs: GenerationJobSummary[];
+};
+
+export type PersonaModelListResponse = {
+  items: PersonaModelSummary[];
+  count: number;
+};
+
+export type PersonaModelResponse = {
+  personaModel: PersonaModelDetail;
+};

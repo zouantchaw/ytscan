@@ -4,12 +4,26 @@ import type {
   ChannelSummary,
   ChannelTopicsResponse,
   ChannelTrendsResponse,
+  GenerationJobSummary,
   HookLibraryResponse,
   HookSummary,
+  JsonObject,
   MeResponse,
+  PersonaModelDetail,
+  PersonaModelListResponse,
+  PersonaModelResponse,
+  PersonaModelSummary,
   ScanJob,
   SearchResponse,
   SearchResultItem,
+  ScriptLabStep,
+  ScriptOutputVersion,
+  ScriptProjectDetail,
+  ScriptProjectListResponse,
+  ScriptProjectResponse,
+  ScriptProjectSummary,
+  ScriptResearchItem,
+  ThumbnailBriefVersion,
   VideoSummary,
   WorkspaceSummary,
 } from "@ytscan/core";
@@ -26,7 +40,9 @@ import {
 } from "./analytics";
 import { createAuth, getAllowedOrigins } from "./auth";
 import type { Env } from "./env";
+import { launchLambdaInstance, resolveLambdaLaunchPlan } from "./lambda";
 import { buildMeResponse, getRequestContext, type RequestContext } from "./request-context";
+import { buildPersonaDatasetLines, generateScriptLabStep } from "./script-lab";
 
 type ChannelRow = {
   id: number;
@@ -90,6 +106,95 @@ type InternalJobPatch = {
   stage?: string;
   status?: string;
   totalVideos?: number | null;
+};
+
+type ScriptProjectRow = {
+  id: string;
+  workspace_id: string;
+  channel_id: number | null;
+  title: string;
+  topic: string;
+  status: string;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+  channel_slug: string | null;
+  channel_name: string | null;
+  research_item_count: number;
+  latest_output_step: string | null;
+  latest_output_version: number | null;
+};
+
+type ScriptResearchItemRow = {
+  id: string;
+  project_id: string;
+  item_type: string;
+  source_channel_slug: string | null;
+  source_youtube_id: string | null;
+  source_vector_id: string | null;
+  title: string | null;
+  excerpt: string | null;
+  score: number | null;
+  metadata_json: string;
+  created_at: string;
+};
+
+type ScriptOutputRow = {
+  id: string;
+  project_id: string;
+  step: string;
+  version: number;
+  model_key: string | null;
+  content: string;
+  metadata_json: string;
+  created_by_user_id: string | null;
+  created_at: string;
+};
+
+type ThumbnailBriefRow = {
+  id: string;
+  project_id: string;
+  version: number;
+  content: string;
+  metadata_json: string;
+  created_at: string;
+};
+
+type GenerationJobRow = {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  persona_model_id: string | null;
+  job_type: string;
+  provider: string;
+  provider_job_id: string | null;
+  status: string;
+  progress: number;
+  input_json: string;
+  output_json: string;
+  error_message: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type PersonaModelRow = {
+  id: string;
+  workspace_id: string;
+  channel_id: number | null;
+  status: string;
+  provider: string;
+  provider_job_id: string | null;
+  base_model: string;
+  adapter_path: string | null;
+  dataset_path: string | null;
+  dataset_examples: number;
+  metadata_json: string;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+  channel_slug: string | null;
+  channel_name: string | null;
 };
 
 const BASE_CORS_HEADERS: HeadersInit = {
@@ -176,6 +281,111 @@ const INTERNAL_SCAN_JOB_SELECT = `
   completed_at
 `;
 
+const SCRIPT_PROJECT_SELECT = `
+  sp.id,
+  sp.workspace_id,
+  sp.channel_id,
+  sp.title,
+  sp.topic,
+  sp.status,
+  sp.created_by_user_id,
+  sp.created_at,
+  sp.updated_at,
+  c.slug AS channel_slug,
+  c.channel_name AS channel_name,
+  (
+    SELECT COUNT(*)
+    FROM script_research_items sri
+    WHERE sri.project_id = sp.id
+  ) AS research_item_count,
+  (
+    SELECT so.step
+    FROM script_outputs so
+    WHERE so.project_id = sp.id
+    ORDER BY so.created_at DESC
+    LIMIT 1
+  ) AS latest_output_step,
+  (
+    SELECT so.version
+    FROM script_outputs so
+    WHERE so.project_id = sp.id
+    ORDER BY so.created_at DESC
+    LIMIT 1
+  ) AS latest_output_version
+`;
+
+const SCRIPT_RESEARCH_SELECT = `
+  id,
+  project_id,
+  item_type,
+  source_channel_slug,
+  source_youtube_id,
+  source_vector_id,
+  title,
+  excerpt,
+  score,
+  metadata_json,
+  created_at
+`;
+
+const SCRIPT_OUTPUT_SELECT = `
+  id,
+  project_id,
+  step,
+  version,
+  model_key,
+  content,
+  metadata_json,
+  created_by_user_id,
+  created_at
+`;
+
+const THUMBNAIL_BRIEF_SELECT = `
+  id,
+  project_id,
+  version,
+  content,
+  metadata_json,
+  created_at
+`;
+
+const GENERATION_JOB_SELECT = `
+  id,
+  workspace_id,
+  project_id,
+  persona_model_id,
+  job_type,
+  provider,
+  provider_job_id,
+  status,
+  progress,
+  input_json,
+  output_json,
+  error_message,
+  created_by_user_id,
+  created_at,
+  updated_at
+`;
+
+const PERSONA_MODEL_SELECT = `
+  pm.id,
+  pm.workspace_id,
+  pm.channel_id,
+  pm.status,
+  pm.provider,
+  pm.provider_job_id,
+  pm.base_model,
+  pm.adapter_path,
+  pm.dataset_path,
+  pm.dataset_examples,
+  pm.metadata_json,
+  pm.created_by_user_id,
+  pm.created_at,
+  pm.updated_at,
+  c.slug AS channel_slug,
+  c.channel_name AS channel_name
+`;
+
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const pathname = normalizePath(url.pathname);
@@ -217,6 +427,18 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     if (pathname === "/api/workspace" && request.method === "GET") {
       return withCors(getWorkspace(context), request, env);
+    }
+
+    if (parts[0] === "api" && parts[1] === "script-lab") {
+      return withCors(await handleScriptLabRoute(parts, request, context, env), request, env);
+    }
+
+    if (parts[0] === "api" && parts[1] === "persona-models") {
+      return withCors(await handlePersonaModelsRoute(parts, request, context, env), request, env);
+    }
+
+    if (parts[0] === "api" && parts[1] === "generation-jobs" && parts[2] && request.method === "GET") {
+      return withCors(await getGenerationJob(parts[2], context, env), request, env);
     }
 
     if (pathname === "/api/channels" && request.method === "GET") {
@@ -1177,6 +1399,1280 @@ async function getScanJob(
 
   if (!row) return jsonResponse({ error: "Scan job not found" }, 404);
   return jsonResponse({ job: toScanJob(row) });
+}
+
+async function handleScriptLabRoute(
+  parts: string[],
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  if (parts[2] !== "projects") {
+    return jsonResponse({ error: "Not found" }, 404);
+  }
+
+  if (!parts[3]) {
+    if (request.method === "GET") return listScriptProjects(context, env);
+    if (request.method === "POST") return createScriptProject(request, context, env);
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  const projectId = decodeURIComponent(parts[3]);
+
+  if (parts.length === 4) {
+    if (request.method === "GET") return getScriptProject(projectId, context, env);
+    if (request.method === "PATCH") return updateScriptProject(projectId, request, context, env);
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  if (request.method !== "POST") {
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  if (parts[4] === "research") return buildScriptResearch(projectId, request, context, env);
+  if (parts[4] === "generate") return generateScriptProjectOutput(projectId, request, context, env);
+
+  return jsonResponse({ error: "Not found" }, 404);
+}
+
+async function handlePersonaModelsRoute(
+  parts: string[],
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  if (!parts[2]) {
+    if (request.method === "GET") return listPersonaModels(context, env);
+    if (request.method === "POST") return createPersonaModel(request, context, env);
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  const modelId = decodeURIComponent(parts[2]);
+
+  if (parts.length === 3) {
+    if (request.method === "GET") return getPersonaModel(modelId, context, env);
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  if (parts[3] === "train" && request.method === "POST") {
+    return trainPersonaModel(modelId, request, context, env);
+  }
+
+  return jsonResponse({ error: "Not found" }, 404);
+}
+
+function parseJsonObject(rawValue: string | null | undefined): JsonObject {
+  if (!rawValue) return {};
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as JsonObject)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseBoolean(rawValue: unknown, fallback = false): boolean {
+  if (typeof rawValue === "boolean") return rawValue;
+  if (typeof rawValue === "string") {
+    if (rawValue === "true") return true;
+    if (rawValue === "false") return false;
+  }
+  return fallback;
+}
+
+function isScriptLabStep(rawValue: string): rawValue is ScriptLabStep {
+  return (
+    rawValue === "hooks" ||
+    rawValue === "outline" ||
+    rawValue === "script" ||
+    rawValue === "director_notes" ||
+    rawValue === "thumbnail_brief" ||
+    rawValue === "previs"
+  );
+}
+
+function toScriptProjectSummary(row: ScriptProjectRow): ScriptProjectSummary {
+  return {
+    id: row.id,
+    title: row.title,
+    topic: row.topic,
+    status: row.status,
+    channelSlug: row.channel_slug,
+    channelName: row.channel_name,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    researchItemCount: Number(row.research_item_count ?? 0),
+    latestOutputStep: row.latest_output_step,
+    latestOutputVersion:
+      row.latest_output_version === null || row.latest_output_version === undefined
+        ? null
+        : Number(row.latest_output_version),
+  };
+}
+
+function toScriptResearchItem(row: ScriptResearchItemRow): ScriptResearchItem {
+  return {
+    id: row.id,
+    itemType: row.item_type,
+    sourceChannelSlug: row.source_channel_slug,
+    sourceYoutubeId: row.source_youtube_id,
+    sourceVectorId: row.source_vector_id,
+    title: row.title,
+    excerpt: row.excerpt,
+    score: row.score === null || row.score === undefined ? null : Number(row.score),
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+  };
+}
+
+function toScriptOutputVersion(row: ScriptOutputRow): ScriptOutputVersion {
+  return {
+    id: row.id,
+    step: row.step,
+    version: Number(row.version ?? 1),
+    modelKey: row.model_key,
+    content: row.content,
+    metadata: parseJsonObject(row.metadata_json),
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+  };
+}
+
+function toThumbnailBriefVersion(row: ThumbnailBriefRow): ThumbnailBriefVersion {
+  return {
+    id: row.id,
+    version: Number(row.version ?? 1),
+    content: row.content,
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+  };
+}
+
+function toGenerationJobSummary(row: GenerationJobRow): GenerationJobSummary {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    personaModelId: row.persona_model_id,
+    jobType: row.job_type,
+    provider: row.provider,
+    providerJobId: row.provider_job_id,
+    status: row.status,
+    progress: Number(row.progress ?? 0),
+    input: parseJsonObject(row.input_json),
+    output: parseJsonObject(row.output_json),
+    errorMessage: row.error_message,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toPersonaModelSummary(row: PersonaModelRow): PersonaModelSummary {
+  return {
+    id: row.id,
+    channelSlug: row.channel_slug,
+    channelName: row.channel_name,
+    status: row.status,
+    provider: row.provider,
+    providerJobId: row.provider_job_id,
+    baseModel: row.base_model,
+    adapterPath: row.adapter_path,
+    datasetPath: row.dataset_path,
+    datasetExamples: Number(row.dataset_examples ?? 0),
+    metadata: parseJsonObject(row.metadata_json),
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function findScriptProjectRow(
+  projectId: string,
+  context: RequestContext,
+  env: Env
+): Promise<ScriptProjectRow | null> {
+  const row = await env.DB.prepare(
+    `
+      SELECT ${SCRIPT_PROJECT_SELECT}
+      FROM script_projects sp
+      LEFT JOIN channels c ON c.id = sp.channel_id
+      WHERE sp.id = ? AND sp.workspace_id = ?
+      LIMIT 1
+    `
+  )
+    .bind(projectId, context.workspace.id)
+    .first<ScriptProjectRow>();
+
+  return row ?? null;
+}
+
+async function findPersonaModelRow(
+  modelId: string,
+  context: RequestContext,
+  env: Env
+): Promise<PersonaModelRow | null> {
+  const row = await env.DB.prepare(
+    `
+      SELECT ${PERSONA_MODEL_SELECT}
+      FROM persona_models pm
+      LEFT JOIN channels c ON c.id = pm.channel_id
+      WHERE pm.id = ? AND pm.workspace_id = ?
+      LIMIT 1
+    `
+  )
+    .bind(modelId, context.workspace.id)
+    .first<PersonaModelRow>();
+
+  return row ?? null;
+}
+
+async function listScriptResearchItems(projectId: string, env: Env): Promise<ScriptResearchItem[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${SCRIPT_RESEARCH_SELECT}
+      FROM script_research_items
+      WHERE project_id = ?
+      ORDER BY score DESC, created_at ASC
+    `
+  )
+    .bind(projectId)
+    .all<ScriptResearchItemRow>();
+
+  return results.map(toScriptResearchItem);
+}
+
+async function listScriptOutputs(projectId: string, env: Env): Promise<ScriptOutputVersion[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${SCRIPT_OUTPUT_SELECT}
+      FROM script_outputs
+      WHERE project_id = ?
+      ORDER BY step ASC, version DESC, created_at DESC
+    `
+  )
+    .bind(projectId)
+    .all<ScriptOutputRow>();
+
+  return results.map(toScriptOutputVersion);
+}
+
+async function listThumbnailBriefs(projectId: string, env: Env): Promise<ThumbnailBriefVersion[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${THUMBNAIL_BRIEF_SELECT}
+      FROM thumbnail_briefs
+      WHERE project_id = ?
+      ORDER BY version DESC, created_at DESC
+    `
+  )
+    .bind(projectId)
+    .all<ThumbnailBriefRow>();
+
+  return results.map(toThumbnailBriefVersion);
+}
+
+async function listGenerationJobsForProject(
+  projectId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationJobSummary[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_JOB_SELECT}
+      FROM generation_jobs
+      WHERE workspace_id = ? AND project_id = ?
+      ORDER BY created_at DESC
+    `
+  )
+    .bind(workspaceId, projectId)
+    .all<GenerationJobRow>();
+
+  return results.map(toGenerationJobSummary);
+}
+
+async function listGenerationJobsForPersonaModel(
+  modelId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationJobSummary[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_JOB_SELECT}
+      FROM generation_jobs
+      WHERE workspace_id = ? AND persona_model_id = ?
+      ORDER BY created_at DESC
+    `
+  )
+    .bind(workspaceId, modelId)
+    .all<GenerationJobRow>();
+
+  return results.map(toGenerationJobSummary);
+}
+
+async function loadScriptProjectDetail(
+  projectId: string,
+  context: RequestContext,
+  env: Env
+): Promise<ScriptProjectDetail | null> {
+  const row = await findScriptProjectRow(projectId, context, env);
+  if (!row) return null;
+
+  const [researchItems, outputs, thumbnailBriefs, generationJobs] = await Promise.all([
+    listScriptResearchItems(projectId, env),
+    listScriptOutputs(projectId, env),
+    listThumbnailBriefs(projectId, env),
+    listGenerationJobsForProject(projectId, context.workspace.id, env),
+  ]);
+
+  return {
+    ...toScriptProjectSummary(row),
+    researchItems,
+    outputs,
+    thumbnailBriefs,
+    generationJobs,
+  };
+}
+
+async function listScriptProjects(context: RequestContext, env: Env): Promise<Response> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${SCRIPT_PROJECT_SELECT}
+      FROM script_projects sp
+      LEFT JOIN channels c ON c.id = sp.channel_id
+      WHERE sp.workspace_id = ?
+      ORDER BY sp.updated_at DESC, sp.created_at DESC
+    `
+  )
+    .bind(context.workspace.id)
+    .all<ScriptProjectRow>();
+
+  const response: ScriptProjectListResponse = {
+    items: results.map(toScriptProjectSummary),
+    count: results.length,
+  };
+
+  return jsonResponse(response);
+}
+
+async function createScriptProject(
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const topic = String(payload?.topic ?? "").trim();
+  const title = String(payload?.title ?? "").trim() || `${topic || "Untitled"} Script`;
+  const requestedStatus = String(payload?.status ?? "draft").trim() || "draft";
+  const channelSlug =
+    String(payload?.channelSlug ?? payload?.channel ?? env.DEFAULT_CHANNEL_SLUG ?? "").trim() || null;
+
+  if (!topic) {
+    return jsonResponse({ error: "topic is required" }, 400);
+  }
+
+  const channel = channelSlug ? await findChannel(channelSlug, context, env) : null;
+  if (channelSlug && !channel) {
+    return jsonResponse({ error: "Channel not found" }, 404);
+  }
+
+  const projectId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO script_projects (
+        id,
+        workspace_id,
+        channel_id,
+        title,
+        topic,
+        status,
+        created_by_user_id,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+  )
+    .bind(
+      projectId,
+      context.workspace.id,
+      channel?.id ?? null,
+      title,
+      topic,
+      requestedStatus,
+      context.session.user.id,
+      now,
+      now
+    )
+    .run();
+
+  const detail = await loadScriptProjectDetail(projectId, context, env);
+  const response: ScriptProjectResponse = {
+    project: detail as ScriptProjectDetail,
+  };
+  return jsonResponse(response, 201);
+}
+
+async function getScriptProject(
+  projectId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const detail = await loadScriptProjectDetail(projectId, context, env);
+  if (!detail) return jsonResponse({ error: "Script project not found" }, 404);
+
+  const response: ScriptProjectResponse = { project: detail };
+  return jsonResponse(response);
+}
+
+async function updateScriptProject(
+  projectId: string,
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const existing = await findScriptProjectRow(projectId, context, env);
+  if (!existing) return jsonResponse({ error: "Script project not found" }, 404);
+
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const assignments = ["updated_at = ?"];
+  const binds: unknown[] = [new Date().toISOString()];
+
+  if (payload.title !== undefined) {
+    assignments.push("title = ?");
+    binds.push(String(payload.title ?? "").trim() || existing.title);
+  }
+
+  if (payload.topic !== undefined) {
+    const topic = String(payload.topic ?? "").trim();
+    if (!topic) return jsonResponse({ error: "topic cannot be empty" }, 400);
+    assignments.push("topic = ?");
+    binds.push(topic);
+  }
+
+  if (payload.status !== undefined) {
+    assignments.push("status = ?");
+    binds.push(String(payload.status ?? "").trim() || existing.status);
+  }
+
+  if (payload.channelSlug !== undefined || payload.channel !== undefined) {
+    const channelSlug = String(payload.channelSlug ?? payload.channel ?? "").trim();
+    if (!channelSlug) {
+      assignments.push("channel_id = NULL");
+    } else {
+      const channel = await findChannel(channelSlug, context, env);
+      if (!channel) return jsonResponse({ error: "Channel not found" }, 404);
+      assignments.push("channel_id = ?");
+      binds.push(channel.id);
+    }
+  }
+
+  binds.push(projectId, context.workspace.id);
+
+  await env.DB.prepare(
+    `UPDATE script_projects SET ${assignments.join(", ")} WHERE id = ? AND workspace_id = ?`
+  )
+    .bind(...binds)
+    .run();
+
+  const detail = await loadScriptProjectDetail(projectId, context, env);
+  return jsonResponse({ project: detail });
+}
+
+async function rebuildScriptResearch(
+  project: ScriptProjectRow,
+  context: RequestContext,
+  env: Env
+): Promise<ScriptResearchItem[]> {
+  if (!project.channel_slug) {
+    return [];
+  }
+
+  const analytics = await getChannelAnalytics(project.channel_slug, context, env);
+  if (!analytics) return [];
+
+  const searchFilters: SearchFilters = {
+    channelSlug: project.channel_slug,
+    minViews: null,
+    performanceTier: null,
+    dateFrom: null,
+    dateTo: null,
+  };
+
+  const [semanticMatches, textMatches, topHooks, workspaceChannels] = await Promise.all([
+    runSemanticSearch(project.topic, searchFilters, 6, context, env),
+    runTextSearch(project.topic, searchFilters, 6, context, env),
+    fetchHooks(analytics.channel.id, env, { limit: 5, sort: "views" }),
+    listWorkspaceChannelRows(context, env),
+  ]);
+
+  const quoteItems = (semanticMatches && semanticMatches.length > 0 ? semanticMatches : textMatches).slice(0, 6);
+  const gapItems: Array<{
+    averageViews: number;
+    exemplarTitle: string;
+    exemplarVideoUrl: string;
+    exemplarYoutubeId: string;
+    opportunityScore: number;
+    sourceChannel: string;
+    topic: string;
+  }> = [];
+
+  const competitorChannels = workspaceChannels.filter((channel) => channel.slug !== project.channel_slug);
+  for (const competitor of competitorChannels) {
+    const competitorAnalytics = await getChannelAnalytics(competitor.slug, context, env);
+    if (!competitorAnalytics) continue;
+
+    const comparison = buildComparison(
+      {
+        slug: analytics.channel.slug,
+        channelName: analytics.channel.channel_name,
+        totalVideos: analytics.videos.length,
+        averageViews: analytics.averageViews,
+        medianViews: analytics.medianViews,
+        averageEngagementRate: analytics.averageEngagementRate,
+        uploadCadencePerWeek: analytics.stats.uploadCadencePerWeek.current,
+        bestDuration: analytics.stats.bestDuration,
+        topicClusters: analytics.topicClusters,
+      },
+      {
+        slug: competitorAnalytics.channel.slug,
+        channelName: competitorAnalytics.channel.channel_name,
+        totalVideos: competitorAnalytics.videos.length,
+        averageViews: competitorAnalytics.averageViews,
+        medianViews: competitorAnalytics.medianViews,
+        averageEngagementRate: competitorAnalytics.averageEngagementRate,
+        uploadCadencePerWeek: competitorAnalytics.stats.uploadCadencePerWeek.current,
+        bestDuration: competitorAnalytics.stats.bestDuration,
+        topicClusters: competitorAnalytics.topicClusters,
+      }
+    );
+
+    gapItems.push(
+      ...comparison.topicGaps
+        .filter((item) => item.missingOn === analytics.channel.slug)
+        .map((item) => ({
+          averageViews: item.averageViews,
+          exemplarTitle: item.exemplarTitle,
+          exemplarVideoUrl: item.exemplarVideoUrl,
+          exemplarYoutubeId: item.exemplarYoutubeId,
+          opportunityScore: item.opportunityScore,
+          sourceChannel: item.sourceChannel,
+          topic: item.topic,
+        }))
+    );
+  }
+
+  const rows: Array<{
+    excerpt: string | null;
+    itemType: string;
+    metadata: JsonObject;
+    score: number | null;
+    sourceChannelSlug: string | null;
+    sourceVectorId: string | null;
+    sourceYoutubeId: string | null;
+    title: string | null;
+  }> = [
+    ...quoteItems.map((item) => ({
+      excerpt: item.snippet,
+      itemType: "quote",
+      metadata: {
+        performanceTier: item.performanceTier,
+        timestampLabel: item.timestampLabel,
+        videoTitle: item.title,
+        videoUrl: item.videoUrl,
+        viewCount: item.viewCount,
+      },
+      score: item.score ?? null,
+      sourceChannelSlug: item.channelSlug,
+      sourceVectorId: item.vectorId,
+      sourceYoutubeId: item.youtubeId,
+      title: item.title,
+    })),
+    ...topHooks.map((hook) => ({
+      excerpt: hook.text,
+      itemType: "hook",
+      metadata: {
+        hookType: hook.hookType,
+        timestampLabel: hook.timestampLabel,
+        videoTitle: hook.videoTitle,
+        videoUrl: hook.videoUrl,
+        viewCount: hook.viewCount,
+      },
+      score: hook.viewCount,
+      sourceChannelSlug: project.channel_slug,
+      sourceVectorId: null,
+      sourceYoutubeId: hook.youtubeId,
+      title: hook.videoTitle,
+    })),
+    ...analytics.topicClusters.slice(0, 4).map((topic) => ({
+      excerpt: `Average views ${topic.averageViews.toLocaleString()} across ${topic.videoCount} videos.`,
+      itemType: "topic_cluster",
+      metadata: {
+        averageEngagementRate: topic.averageEngagementRate,
+        exemplarVideoUrl: topic.exemplarVideoUrl,
+        shareOfChannel: topic.shareOfChannel,
+        topVideoTitle: topic.topVideoTitle,
+      },
+      score: topic.averageViews,
+      sourceChannelSlug: project.channel_slug,
+      sourceVectorId: null,
+      sourceYoutubeId: topic.topVideoYoutubeId,
+      title: topic.topic,
+    })),
+    ...gapItems
+      .sort((left, right) => right.opportunityScore - left.opportunityScore)
+      .slice(0, 4)
+      .map((item) => ({
+        excerpt: `${item.sourceChannel} is winning on ${item.topic} with ${Math.round(item.averageViews).toLocaleString()} average views.`,
+        itemType: "gap",
+        metadata: {
+          exemplarTitle: item.exemplarTitle,
+          exemplarVideoUrl: item.exemplarVideoUrl,
+          opportunityScore: item.opportunityScore,
+        },
+        score: item.opportunityScore,
+        sourceChannelSlug: item.sourceChannel,
+        sourceVectorId: null,
+        sourceYoutubeId: item.exemplarYoutubeId,
+        title: item.topic,
+      })),
+  ];
+
+  await env.DB.prepare(`DELETE FROM script_research_items WHERE project_id = ?`).bind(project.id).run();
+
+  const createdAt = new Date().toISOString();
+  const inserts = rows.map((row) =>
+    env.DB.prepare(
+      `
+        INSERT INTO script_research_items (
+          id,
+          project_id,
+          item_type,
+          source_channel_slug,
+          source_youtube_id,
+          source_vector_id,
+          title,
+          excerpt,
+          score,
+          metadata_json,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    ).bind(
+      crypto.randomUUID(),
+      project.id,
+      row.itemType,
+      row.sourceChannelSlug,
+      row.sourceYoutubeId,
+      row.sourceVectorId,
+      row.title,
+      row.excerpt,
+      row.score,
+      JSON.stringify(row.metadata),
+      createdAt
+    )
+  );
+
+  if (inserts.length > 0) {
+    await env.DB.batch(inserts);
+  }
+
+  await touchScriptProject(project.id, env);
+  return listScriptResearchItems(project.id, env);
+}
+
+async function buildScriptResearch(
+  projectId: string,
+  _request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const project = await findScriptProjectRow(projectId, context, env);
+  if (!project) return jsonResponse({ error: "Script project not found" }, 404);
+
+  const researchItems = await rebuildScriptResearch(project, context, env);
+  const detail = await loadScriptProjectDetail(projectId, context, env);
+
+  return jsonResponse({
+    count: researchItems.length,
+    project: detail,
+    researchItems,
+  });
+}
+
+async function generateScriptProjectOutput(
+  projectId: string,
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const project = await findScriptProjectRow(projectId, context, env);
+  if (!project) return jsonResponse({ error: "Script project not found" }, 404);
+  if (!project.channel_slug) {
+    return jsonResponse({ error: "Attach a channel before generating Script Lab outputs" }, 400);
+  }
+
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const rawStep = String(payload?.step ?? "").trim();
+  if (!isScriptLabStep(rawStep)) {
+    return jsonResponse({ error: "A valid Script Lab step is required" }, 400);
+  }
+
+  const analytics = await getChannelAnalytics(project.channel_slug, context, env);
+  if (!analytics) return jsonResponse({ error: "Channel not found" }, 404);
+
+  const [researchItems, outputs, topHooks] = await Promise.all([
+    listScriptResearchItems(projectId, env),
+    listScriptOutputs(projectId, env),
+    fetchHooks(analytics.channel.id, env, { limit: 6, sort: "views" }),
+  ]);
+
+  const ensuredResearch =
+    researchItems.length > 0 ? researchItems : await rebuildScriptResearch(project, context, env);
+  const generatorContext = {
+    channelName: analytics.channel.channel_name,
+    channelSlug: analytics.channel.slug,
+    existingOutputs: outputs,
+    projectTitle: project.title,
+    researchItems: ensuredResearch,
+    topic: project.topic,
+    topicClusters: analytics.topicClusters,
+    topHooks,
+  };
+
+  const manualContent = String(payload?.content ?? "").trim();
+  const generated = manualContent
+    ? { content: manualContent, metadata: { source: "manual" } }
+    : generateScriptLabStep(rawStep, generatorContext);
+  const modelKey = manualContent ? "manual" : "retrieval-template-v1";
+  const metadata = {
+    ...generated.metadata,
+    topic: project.topic,
+  };
+
+  let generationJobId: string | null = null;
+
+  if (rawStep === "thumbnail_brief") {
+    const nextVersion = await getNextThumbnailBriefVersion(projectId, env);
+    await env.DB.prepare(
+      `
+        INSERT INTO thumbnail_briefs (id, project_id, version, content, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `
+    )
+      .bind(
+        crypto.randomUUID(),
+        projectId,
+        nextVersion,
+        generated.content,
+        JSON.stringify(metadata),
+        new Date().toISOString()
+      )
+      .run();
+  } else {
+    const nextVersion = await getNextScriptOutputVersion(projectId, rawStep, env);
+    const outputId = crypto.randomUUID();
+    await env.DB.prepare(
+      `
+        INSERT INTO script_outputs (
+          id,
+          project_id,
+          step,
+          version,
+          model_key,
+          content,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+      .bind(
+        outputId,
+        projectId,
+        rawStep,
+        nextVersion,
+        modelKey,
+        generated.content,
+        JSON.stringify(metadata),
+        context.session.user.id,
+        new Date().toISOString()
+      )
+      .run();
+
+    if (rawStep === "previs") {
+      const job = await createGenerationJob(
+        {
+          jobType: "previs",
+          output: {},
+          progress: 0,
+          projectId,
+          provider: "internal",
+          providerJobId: null,
+          status: "queued",
+          input: {
+            briefOutputId: outputId,
+            projectTitle: project.title,
+            topic: project.topic,
+          },
+          personaModelId: null,
+        },
+        context,
+        env
+      );
+      generationJobId = job.id;
+    }
+  }
+
+  await touchScriptProject(projectId, env);
+  const detail = await loadScriptProjectDetail(projectId, context, env);
+
+  return jsonResponse({
+    generationJobId,
+    project: detail,
+    step: rawStep,
+  });
+}
+
+async function listPersonaModels(context: RequestContext, env: Env): Promise<Response> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${PERSONA_MODEL_SELECT}
+      FROM persona_models pm
+      LEFT JOIN channels c ON c.id = pm.channel_id
+      WHERE pm.workspace_id = ?
+      ORDER BY pm.updated_at DESC, pm.created_at DESC
+    `
+  )
+    .bind(context.workspace.id)
+    .all<PersonaModelRow>();
+
+  const response: PersonaModelListResponse = {
+    items: results.map(toPersonaModelSummary),
+    count: results.length,
+  };
+
+  return jsonResponse(response);
+}
+
+async function getPersonaModel(
+  modelId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const row = await findPersonaModelRow(modelId, context, env);
+  if (!row) return jsonResponse({ error: "Persona model not found" }, 404);
+
+  const detail: PersonaModelDetail = {
+    ...toPersonaModelSummary(row),
+    generationJobs: await listGenerationJobsForPersonaModel(modelId, context.workspace.id, env),
+  };
+
+  const response: PersonaModelResponse = { personaModel: detail };
+  return jsonResponse(response);
+}
+
+async function createPersonaModel(
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const channelSlug =
+    String(payload?.channelSlug ?? payload?.channel ?? env.DEFAULT_CHANNEL_SLUG ?? "").trim() || null;
+  const baseModel =
+    String(payload?.baseModel ?? "meta-llama/Meta-Llama-3-8B-Instruct").trim() ||
+    "meta-llama/Meta-Llama-3-8B-Instruct";
+
+  if (!channelSlug) {
+    return jsonResponse({ error: "channelSlug is required" }, 400);
+  }
+
+  const channel = await findChannel(channelSlug, context, env);
+  if (!channel) return jsonResponse({ error: "Channel not found" }, 404);
+
+  const [topHooks, transcriptPassages] = await Promise.all([
+    fetchHooks(channel.id, env, { limit: 120, sort: "views" }),
+    fetchPersonaTranscriptPassages(channel.id, env),
+  ]);
+
+  const dataset = buildPersonaDatasetLines({
+    channelName: channel.channel_name,
+    channelSlug: channel.slug,
+    topHooks,
+    transcriptPassages,
+  });
+
+  const modelId = crypto.randomUUID();
+  const datasetKey = `persona-datasets/${context.workspace.id}/${modelId}.jsonl`;
+  if (env.ASSETS) {
+    await env.ASSETS.put(datasetKey, `${dataset.lines.join("\n")}\n`, {
+      httpMetadata: {
+        contentType: "application/x-ndjson",
+      },
+    });
+  }
+
+  let launchPlanMetadata: JsonObject = {};
+  try {
+    const launchPlan = await resolveLambdaLaunchPlan(env);
+    launchPlanMetadata = {
+      lambdaLaunchPlan: launchPlan,
+      estimatedCostUsdPerHour:
+        launchPlan.priceCentsPerHour === null
+          ? null
+          : Number((launchPlan.priceCentsPerHour / 100).toFixed(2)),
+    };
+  } catch (error) {
+    launchPlanMetadata = {
+      lambdaLaunchPlanError: error instanceof Error ? error.message : "Unable to resolve Lambda launch plan.",
+    };
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `
+      INSERT INTO persona_models (
+        id,
+        workspace_id,
+        channel_id,
+        status,
+        provider,
+        provider_job_id,
+        base_model,
+        adapter_path,
+        dataset_path,
+        dataset_examples,
+        metadata_json,
+        created_by_user_id,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, 'ready', 'lambda', NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+    `
+  )
+    .bind(
+      modelId,
+      context.workspace.id,
+      channel.id,
+      baseModel,
+      env.ASSETS ? `assets://${datasetKey}` : datasetKey,
+      dataset.exampleCount,
+      JSON.stringify({
+        ...dataset.metadata,
+        ...launchPlanMetadata,
+        channelName: channel.channel_name,
+      }),
+      context.session.user.id,
+      now,
+      now
+    )
+    .run();
+
+  return getPersonaModel(modelId, context, env);
+}
+
+async function trainPersonaModel(
+  modelId: string,
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const personaModel = await findPersonaModelRow(modelId, context, env);
+  if (!personaModel) return jsonResponse({ error: "Persona model not found" }, 404);
+
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const launchInstance = parseBoolean(payload?.launchInstance, false);
+
+  let launchPlan;
+  try {
+    launchPlan = await resolveLambdaLaunchPlan(env, {
+      instanceTypeName:
+        payload?.instanceTypeName === undefined || payload?.instanceTypeName === null
+          ? null
+          : String(payload.instanceTypeName),
+      regionName:
+        payload?.regionName === undefined || payload?.regionName === null
+          ? null
+          : String(payload.regionName),
+      sshKeyNames: Array.isArray(payload?.sshKeyNames)
+        ? payload.sshKeyNames.map((value) => String(value))
+        : null,
+    });
+  } catch (error) {
+    if (launchInstance) {
+      return jsonResponse({ error: error instanceof Error ? error.message : "Unable to plan Lambda launch" }, 400);
+    }
+    launchPlan = null;
+  }
+
+  const job = await createGenerationJob(
+    {
+      jobType: "persona_train",
+      output: {},
+      progress: launchInstance ? 0.05 : 0,
+      projectId: null,
+      provider: "lambda",
+      providerJobId: null,
+      status: launchInstance ? "provisioning" : "queued",
+      input: {
+        baseModel: personaModel.base_model,
+        channelSlug: personaModel.channel_slug,
+        datasetPath: personaModel.dataset_path,
+        launchInstance,
+        launchPlan,
+      },
+      personaModelId: personaModel.id,
+    },
+    context,
+    env
+  );
+
+  let nextStatus = launchInstance ? "training" : "queued";
+  let providerJobId: string | null = null;
+  let errorMessage: string | null = null;
+
+  if (launchInstance && launchPlan) {
+    try {
+      const launchResult = await launchLambdaInstance(env, {
+        ...launchPlan,
+        name: `ytscan-${(personaModel.channel_slug ?? "model").slice(0, 24)}-${personaModel.id.slice(0, 8)}`,
+        tags: [
+          { key: "app", value: "ytscan" },
+          { key: "job_type", value: "persona_train" },
+          { key: "workspace_id", value: context.workspace.id },
+        ],
+      });
+
+      providerJobId = launchResult.instanceIds[0] ?? null;
+      await env.DB.prepare(
+        `
+          UPDATE generation_jobs
+          SET provider_job_id = ?, status = 'running', progress = ?, output_json = ?, updated_at = ?
+          WHERE id = ? AND workspace_id = ?
+        `
+      )
+        .bind(
+          providerJobId,
+          0.1,
+          JSON.stringify({
+            launchPlan,
+            launchResult: launchResult.raw,
+          }),
+          new Date().toISOString(),
+          job.id,
+          context.workspace.id
+        )
+        .run();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : "Lambda launch failed";
+      nextStatus = "failed";
+      await env.DB.prepare(
+        `
+          UPDATE generation_jobs
+          SET status = 'failed', error_message = ?, output_json = ?, updated_at = ?
+          WHERE id = ? AND workspace_id = ?
+        `
+      )
+        .bind(
+          errorMessage,
+          JSON.stringify({
+            launchPlan,
+          }),
+          new Date().toISOString(),
+          job.id,
+          context.workspace.id
+        )
+        .run();
+    }
+  }
+
+  await env.DB.prepare(
+    `
+      UPDATE persona_models
+      SET status = ?, provider_job_id = ?, updated_at = ?
+      WHERE id = ? AND workspace_id = ?
+    `
+  )
+    .bind(nextStatus, providerJobId, new Date().toISOString(), personaModel.id, context.workspace.id)
+    .run();
+
+  const detail = await getPersonaModel(modelId, context, env);
+  if (!errorMessage) return detail;
+
+  return new Response(detail.body, {
+    headers: detail.headers,
+    status: 202,
+  });
+}
+
+async function getGenerationJob(
+  jobId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const row = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_JOB_SELECT}
+      FROM generation_jobs
+      WHERE id = ? AND workspace_id = ?
+      LIMIT 1
+    `
+  )
+    .bind(jobId, context.workspace.id)
+    .first<GenerationJobRow>();
+
+  if (!row) return jsonResponse({ error: "Generation job not found" }, 404);
+  return jsonResponse({ job: toGenerationJobSummary(row) });
+}
+
+async function listWorkspaceChannelRows(
+  context: RequestContext,
+  env: Env
+): Promise<ChannelRow[]> {
+  const { results = [] } = await env.DB.prepare(
+    `SELECT ${CHANNEL_SELECT} FROM channels WHERE workspace_id = ? ORDER BY channel_name ASC`
+  )
+    .bind(context.workspace.id)
+    .all<ChannelRow>();
+
+  return results;
+}
+
+async function getNextScriptOutputVersion(
+  projectId: string,
+  step: string,
+  env: Env
+): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COALESCE(MAX(version), 0) AS value FROM script_outputs WHERE project_id = ? AND step = ?`
+  )
+    .bind(projectId, step)
+    .first<{ value: number }>();
+
+  return Number(row?.value ?? 0) + 1;
+}
+
+async function getNextThumbnailBriefVersion(projectId: string, env: Env): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COALESCE(MAX(version), 0) AS value FROM thumbnail_briefs WHERE project_id = ?`
+  )
+    .bind(projectId)
+    .first<{ value: number }>();
+
+  return Number(row?.value ?? 0) + 1;
+}
+
+async function touchScriptProject(projectId: string, env: Env): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(`UPDATE script_projects SET updated_at = ? WHERE id = ?`).bind(now, projectId).run();
+}
+
+async function createGenerationJob(
+  params: {
+    input: JsonObject;
+    jobType: string;
+    output: JsonObject;
+    personaModelId: string | null;
+    progress: number;
+    projectId: string | null;
+    provider: string;
+    providerJobId: string | null;
+    status: string;
+  },
+  context: RequestContext,
+  env: Env
+): Promise<GenerationJobSummary> {
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO generation_jobs (
+        id,
+        workspace_id,
+        project_id,
+        persona_model_id,
+        job_type,
+        provider,
+        provider_job_id,
+        status,
+        progress,
+        input_json,
+        output_json,
+        error_message,
+        created_by_user_id,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+    `
+  )
+    .bind(
+      jobId,
+      context.workspace.id,
+      params.projectId,
+      params.personaModelId,
+      params.jobType,
+      params.provider,
+      params.providerJobId,
+      params.status,
+      params.progress,
+      JSON.stringify(params.input),
+      JSON.stringify(params.output),
+      context.session.user.id,
+      now,
+      now
+    )
+    .run();
+
+  return {
+    id: jobId,
+    projectId: params.projectId,
+    personaModelId: params.personaModelId,
+    jobType: params.jobType,
+    provider: params.provider,
+    providerJobId: params.providerJobId,
+    status: params.status,
+    progress: params.progress,
+    input: params.input,
+    output: params.output,
+    errorMessage: null,
+    createdByUserId: context.session.user.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function fetchPersonaTranscriptPassages(
+  channelId: number,
+  env: Env
+): Promise<Array<{ text: string; title: string; youtubeId: string }>> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT
+        tc.text,
+        v.title,
+        v.youtube_id
+      FROM transcript_chunks tc
+      JOIN videos v ON v.id = tc.video_id
+      WHERE v.channel_id = ?
+      ORDER BY v.view_count DESC, tc.chunk_index ASC
+      LIMIT 900
+    `
+  )
+    .bind(channelId)
+    .all<Record<string, unknown>>();
+
+  return results
+    .map((row) => ({
+      text: dedupeRepeatedPhrases(String(row.text ?? "")),
+      title: String(row.title ?? ""),
+      youtubeId: String(row.youtube_id ?? ""),
+    }))
+    .filter((item) => item.text.length >= 120 && item.text.length <= 1400);
 }
 
 async function handleSearch(

@@ -9,6 +9,10 @@ export type Env = {
   DB: D1Database;
   DEFAULT_CHANNEL_SLUG?: string;
   INTERNAL_RUNNER_TOKEN?: string;
+  LAMBDA_API_KEY?: string;
+  LAMBDA_DEFAULT_INSTANCE_TYPE?: string;
+  LAMBDA_DEFAULT_REGION?: string;
+  LAMBDA_SSH_KEY_NAMES?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM_EMAIL?: string;
   RESEND_FROM_NAME?: string;
