@@ -6,10 +6,12 @@ function buildTargetUrl(
   path: string[],
   namespace: "auth" | "backend"
 ) {
-  const target = new URL(
-    `/api/${namespace}/${path.join("/")}`,
-    getApiOrigin()
-  );
+  const joinedPath = path.join("/");
+  const targetPath =
+    namespace === "auth"
+      ? `/api/auth/${joinedPath}`
+      : `/api/${joinedPath}`;
+  const target = new URL(targetPath, getApiOrigin());
 
   target.search = request.nextUrl.search;
   return target;

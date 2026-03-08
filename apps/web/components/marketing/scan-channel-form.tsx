@@ -56,13 +56,7 @@ export function ScanChannelForm() {
           <ArrowRight className="size-4" />
         </Button>
       </div>
-      {error ? (
-        <p className="mt-3 text-sm text-destructive">{error}</p>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">
-          Start with Codie, Johnny, or any channel you want to model.
-        </p>
-      )}
+      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
     </form>
   );
 }

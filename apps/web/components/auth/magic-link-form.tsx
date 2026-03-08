@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import { Mail, Send } from "lucide-react";
+import { Github, Mail, Send } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 
 type MagicLinkFormProps = {
   defaultChannelUrl?: string;
@@ -40,6 +39,10 @@ export function MagicLinkForm({
     setSuccess(null);
 
     startTransition(async () => {
+      if (mode === "sign-up" && typeof window !== "undefined") {
+        window.localStorage.setItem("ytscan:first-channel-url", channelUrl.trim());
+      }
+
       const callbackURL = toAbsolutePath("/app");
       const payload =
         mode === "sign-up"
@@ -78,17 +81,25 @@ export function MagicLinkForm({
         <p className="text-[15px] leading-7 text-muted-foreground">
           {mode === "sign-up"
             ? "Your first channel scan is free. No credit card required."
-            : "Sign in with a one-time magic link to continue."}
+            : "Sign in to your account to continue."}
         </p>
       </div>
 
-      <div className="rounded-[12px] border border-border bg-subtle p-4">
-        <div className="flex items-start gap-3">
-          <Badge variant="accent">Magic Link</Badge>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Google, GitHub, and password flows are designed, but the first frontend slice is wired to the real backend auth path.
-          </p>
-        </div>
+      <div className="space-y-3">
+        <Button type="button" variant="outline" size="lg" className="w-full justify-center" disabled>
+          <span className="text-base font-semibold">G</span>
+          Continue with Google
+        </Button>
+        <Button type="button" variant="outline" size="lg" className="w-full justify-center" disabled>
+          <Github className="size-4" />
+          Continue with GitHub
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+        <div className="h-px flex-1 bg-separator" />
+        <span>or</span>
+        <div className="h-px flex-1 bg-separator" />
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
@@ -129,7 +140,7 @@ export function MagicLinkForm({
           </label>
         ) : null}
 
-        <Button type="submit" size="lg" className="w-full" disabled={isPending}>
+        <Button type="submit" size="lg" className="w-full justify-center" disabled={isPending}>
           {isPending ? "Sending link..." : submitLabel}
           <Send className="size-4" />
         </Button>

@@ -135,6 +135,13 @@ export type HookLibraryResponse = {
   sort: "views" | "recent";
 };
 
+export type ChannelVideosResponse = {
+  channel: string;
+  items: VideoSummary[];
+  count: number;
+  sort: "views" | "recent";
+};
+
 export type ChannelTopicsResponse = {
   channel: string;
   items: TopicClusterSummary[];

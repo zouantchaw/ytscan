@@ -10,7 +10,7 @@ const navItems = [
 
 export function LandingNav() {
   return (
-    <header className="sticky top-0 z-20 border-b border-transparent bg-background/90 backdrop-blur-sm">
+    <header className="bg-background">
       <div className="container-page flex h-[86px] items-center justify-between gap-6">
         <AppLogo size="sm" />
         <nav className="hidden items-center gap-7 md:flex">

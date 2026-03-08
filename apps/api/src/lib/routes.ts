@@ -4,6 +4,7 @@ import type {
   ChannelSummary,
   ChannelTopicsResponse,
   ChannelTrendsResponse,
+  ChannelVideosResponse,
   GenerationJobSummary,
   HookLibraryResponse,
   HookSummary,
@@ -1116,6 +1117,7 @@ async function handleChannelRoute(
   }
 
   if (parts[3] === "hooks") return getHookLibrary(slug, url, context, env);
+  if (parts[3] === "videos") return getChannelVideos(slug, url, context, env);
   if (parts[3] === "topics") return getChannelTopics(slug, url, context, env);
   if (parts[3] === "trends") return getChannelTrends(slug, context, env);
 
@@ -1335,6 +1337,50 @@ async function getHookLibrary(
   };
 
   response.count = response.items.length;
+  return jsonResponse(response);
+}
+
+async function getChannelVideos(
+  slug: string,
+  url: URL,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const analytics = await getChannelAnalytics(slug, context, env);
+  if (!analytics) return jsonResponse({ error: "Channel not found" }, 404);
+
+  const sort = url.searchParams.get("sort") === "views" ? "views" : "recent";
+  const limit = clampLimit(url.searchParams.get("limit"), 30, 250);
+  const items = [...analytics.videos]
+    .sort((left, right) => {
+      if (sort === "views" && right.viewCount !== left.viewCount) {
+        return right.viewCount - left.viewCount;
+      }
+
+      const dateDelta = right.uploadDate.localeCompare(left.uploadDate);
+      if (dateDelta !== 0) return dateDelta;
+      return right.viewCount - left.viewCount;
+    })
+    .slice(0, limit)
+    .map((video) => ({
+      youtubeId: video.youtubeId,
+      title: video.title,
+      uploadDate: video.uploadDate,
+      durationSec: video.durationSec,
+      viewCount: video.viewCount,
+      likeCount: video.likeCount,
+      commentCount: video.commentCount,
+      performanceTier: video.performanceTier,
+      videoUrl: video.videoUrl,
+    }));
+
+  const response: ChannelVideosResponse = {
+    channel: slug,
+    items,
+    count: items.length,
+    sort,
+  };
+
   return jsonResponse(response);
 }
 
