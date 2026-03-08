@@ -696,26 +696,38 @@ function compactMessage(message: string | null | undefined): string | null {
 async function leaseScanJob(request: Request, env: Env): Promise<Response> {
   const payload = await readJsonBody<Record<string, unknown>>(request);
   const requestedJobId = String(payload?.jobId ?? "").trim() || null;
+  const now = new Date().toISOString();
+  const leaseableWhere = `
+    (
+      status = 'queued'
+      OR (
+        status = 'running'
+        AND lease_expires_at IS NOT NULL
+        AND lease_expires_at < ?
+      )
+    )
+  `;
 
   const row = requestedJobId
     ? await env.DB.prepare(
-        `SELECT ${INTERNAL_SCAN_JOB_SELECT} FROM scan_jobs WHERE id = ? AND status = 'queued' LIMIT 1`
+        `SELECT ${INTERNAL_SCAN_JOB_SELECT} FROM scan_jobs WHERE id = ? AND ${leaseableWhere} LIMIT 1`
       )
-        .bind(requestedJobId)
+        .bind(requestedJobId, now)
         .first<InternalScanJobRow>()
     : await env.DB.prepare(
-        `SELECT ${INTERNAL_SCAN_JOB_SELECT} FROM scan_jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`
-      ).first<InternalScanJobRow>();
+        `SELECT ${INTERNAL_SCAN_JOB_SELECT} FROM scan_jobs WHERE ${leaseableWhere} ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`
+      )
+        .bind(now)
+        .first<InternalScanJobRow>();
 
   if (!row) {
     return jsonResponse({ job: null });
   }
 
-  const now = new Date().toISOString();
   const leaseToken = crypto.randomUUID();
   const leaseExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-  await env.DB.prepare(
+  const leaseUpdate = await env.DB.prepare(
     `
       UPDATE scan_jobs
       SET
@@ -725,10 +737,22 @@ async function leaseScanJob(request: Request, env: Env): Promise<Response> {
         started_at = COALESCE(started_at, ?),
         updated_at = ?
       WHERE id = ?
+        AND (
+          status = 'queued'
+          OR (
+            status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at < ?
+          )
+        )
     `
   )
-    .bind(leaseToken, leaseExpiresAt, now, now, row.id)
+    .bind(leaseToken, leaseExpiresAt, now, now, row.id, now)
     .run();
+
+  if (!leaseUpdate.meta.changes) {
+    return jsonResponse({ job: null });
+  }
 
   const leased = await fetchInternalScanJob(row.id, env);
   if (!leased) return jsonResponse({ job: null });
