@@ -267,9 +267,6 @@ def main() -> None:
                 "k_proj",
                 "v_proj",
                 "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
             ],
         )
         model = get_peft_model(model, lora_config)
@@ -322,7 +319,6 @@ def main() -> None:
 
         adapter_dir.mkdir(parents=True, exist_ok=True)
         model.save_pretrained(adapter_dir)
-        tokenizer.save_pretrained(adapter_dir)
         zip_directory(adapter_dir, adapter_zip_path)
 
         metrics = {

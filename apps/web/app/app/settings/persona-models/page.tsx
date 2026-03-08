@@ -29,6 +29,9 @@ function getStatusTone(status: string) {
   ) {
     return { dot: "bg-[#E3A234]", text: "text-[#E3A234]", label: "Training" };
   }
+  if (status === "failed") {
+    return { dot: "bg-destructive", text: "text-destructive", label: "Failed" };
+  }
   return { dot: "bg-placeholder", text: "text-muted-foreground", label: "Untrained" };
 }
 
@@ -179,6 +182,7 @@ function PersonaModelRow({
   const status = model?.status ?? "untrained";
   const isReady = status === "ready";
   const isActive = isActivePersonaStatus(status);
+  const isFailed = status === "failed";
   const statusTone = getStatusTone(status);
   const baseModel = model?.baseModel
     ? model.baseModel.split("/").at(-1)?.replace("-Instruct", "") ?? model.baseModel
@@ -210,7 +214,7 @@ function PersonaModelRow({
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {model && progress !== null && status !== "ready" ? (
+        {model && progress !== null && (isActive || isFailed) ? (
           <span className="rounded-[6px] bg-secondary px-3 py-1.5 text-[12px] font-medium text-muted-foreground">
             {progress}%
           </span>
@@ -221,7 +225,13 @@ function PersonaModelRow({
           onClick={onTrain}
           disabled={isPending || isActive}
         >
-          {isPending ? "Starting..." : isActive ? "Training..." : model && isReady ? "Retrain" : "Train"}
+          {isPending
+            ? "Starting..."
+            : isActive
+              ? "Training..."
+              : model && (isReady || isFailed)
+                ? "Retrain"
+                : "Train"}
         </Button>
         <Button asChild variant="outline" size="sm">
           <a href={`#model-${model?.id ?? channel.slug}`}>Details</a>
