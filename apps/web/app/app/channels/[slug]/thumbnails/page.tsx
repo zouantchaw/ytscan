@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import type { ChannelVideosResponse, VideoSummary } from "@ytscan/core";
@@ -143,6 +144,11 @@ export default function ThumbnailGalleryPage() {
                       ))}
                     </div>
                   </div>
+                  <Button asChild variant="outline">
+                    <Link href={`/app/channels/${slug}/videos/${selectedVideo.youtubeId}`}>
+                      Open Video Detail
+                    </Link>
+                  </Button>
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">

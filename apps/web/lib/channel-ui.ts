@@ -54,3 +54,12 @@ export function getDefaultSearchPrompt(slug: string, channelName: string) {
 export function getVideoThumbnailUrl(youtubeId: string) {
   return `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`;
 }
+
+export function prettifyChannelSlug(slug: string | null | undefined) {
+  if (!slug) return "Channel";
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}

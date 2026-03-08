@@ -73,12 +73,16 @@ function DashboardBarChart({
   );
 }
 
-function TopPerformerRow({ video }: { video: VideoSummary }) {
+function TopPerformerRow({
+  slug,
+  video,
+}: {
+  slug: string;
+  video: VideoSummary;
+}) {
   return (
-    <a
-      href={video.videoUrl}
-      target="_blank"
-      rel="noreferrer"
+    <Link
+      href={`/app/channels/${slug}/videos/${video.youtubeId}`}
       className="grid grid-cols-[72px_1fr_auto] items-center gap-4 border-b border-separator py-4 last:border-b-0 last:pb-0 first:pt-0"
     >
       <VideoThumbnail
@@ -93,7 +97,7 @@ function TopPerformerRow({ video }: { video: VideoSummary }) {
         </p>
       </div>
       <TierBadge tier={video.performanceTier} />
-    </a>
+    </Link>
   );
 }
 
@@ -269,7 +273,7 @@ export default function ChannelDashboardPage() {
             </div>
             <div>
               {channel.topVideos.slice(0, 5).map((video) => (
-                <TopPerformerRow key={video.youtubeId} video={video} />
+                <TopPerformerRow key={video.youtubeId} slug={slug} video={video} />
               ))}
             </div>
           </AppPanel>
@@ -292,7 +296,7 @@ export default function ChannelDashboardPage() {
                 Top Hooks
               </h2>
               <Link
-                href={`/app/channels/${slug}/search`}
+                href={`/app/channels/${slug}/hooks`}
                 className="text-sm font-medium text-primary hover:text-primary/80"
               >
                 View all →

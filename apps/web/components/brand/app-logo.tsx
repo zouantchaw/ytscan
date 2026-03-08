@@ -6,21 +6,25 @@ type AppLogoProps = {
   className?: string;
   href?: string;
   inverted?: boolean;
-  size?: "sm" | "md" | "lg";
+  size?: "xs" | "sm" | "md" | "lg";
 };
 
 const sizeMap = {
+  xs: {
+    mark: 24,
+    text: "text-[17px] leading-[22px]",
+  },
   sm: {
     mark: 28,
-    text: "text-[22px] leading-none",
+    text: "text-[20px] leading-[24px]",
   },
   md: {
-    mark: 36,
-    text: "text-[26px] leading-none",
+    mark: 32,
+    text: "text-[22px] leading-[28px]",
   },
   lg: {
-    mark: 40,
-    text: "text-[30px] leading-none",
+    mark: 36,
+    text: "text-[30px] leading-[34px]",
   },
 };
 

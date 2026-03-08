@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 import type { ChannelSummary, MeResponse } from "@ytscan/core";
@@ -16,12 +17,13 @@ type ChannelCollectionResponse = {
 };
 
 const settingsItems = [
-  "Profile",
-  "Billing",
-  "Team",
-  "API Keys",
-  "Scan History",
-  "Notifications",
+  { label: "Profile", href: "/app/settings" },
+  { label: "Persona Models", href: "/app/settings/persona-models" },
+  { label: "Billing", href: "/app/settings" },
+  { label: "Team", href: "/app/settings" },
+  { label: "API Keys", href: "/app/settings" },
+  { label: "Scan History", href: "/app/settings" },
+  { label: "Notifications", href: "/app/settings" },
 ];
 
 export default function SettingsPage() {
@@ -46,12 +48,13 @@ export default function SettingsPage() {
       <main className="app-page flex flex-col gap-10 py-9 lg:flex-row">
         <aside className="grid w-full gap-1 text-[15px] text-muted-foreground lg:w-[200px] lg:shrink-0">
           {settingsItems.map((item, index) => (
-            <div
-              key={item}
+            <Link
+              href={item.href}
+              key={item.label}
               className={`rounded-[8px] px-4 py-2.5 ${index === 0 ? "bg-secondary font-medium text-foreground" : ""}`}
             >
-              {item}
-            </div>
+              {item.label}
+            </Link>
           ))}
         </aside>
 

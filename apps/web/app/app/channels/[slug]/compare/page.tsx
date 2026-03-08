@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type {
   ChannelCompareResponse,
@@ -118,9 +119,14 @@ export default function ChannelComparePage() {
           <h1 className="font-display text-[48px] font-semibold tracking-[-0.05em] text-foreground">
             Competitor Analysis
           </h1>
-          <Button variant="outline" onClick={handleCycleCompetitor}>
-            + Add Competitor
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button asChild variant="outline">
+              <Link href={`/app/channels/${slug}/compare/picker`}>Pick Channels</Link>
+            </Button>
+            <Button variant="outline" onClick={handleCycleCompetitor}>
+              Rotate Competitor
+            </Button>
+          </div>
         </section>
 
         <section className="grid gap-6 xl:grid-cols-[1fr_auto_1fr] xl:items-center">

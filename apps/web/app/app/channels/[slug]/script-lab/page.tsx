@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
 import type {
   ChannelDashboard,
@@ -16,8 +16,10 @@ import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 export default function ScriptLabTopicPage() {
   const params = useParams<{ slug: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const slug = params.slug;
-  const [topic, setTopic] = useState("");
+  const seededTopic = searchParams.get("topic")?.trim() ?? "";
+  const [topic, setTopic] = useState(seededTopic);
   const [usePersonaModel, setUsePersonaModel] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
