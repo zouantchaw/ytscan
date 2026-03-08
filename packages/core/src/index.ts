@@ -18,6 +18,26 @@ export type VideoSummary = {
   commentCount: number;
   performanceTier: string;
   videoUrl: string;
+  thumbnailAnalysis: ThumbnailAnalysisSummary | null;
+};
+
+export type ThumbnailAnalysisSummary = {
+  provider: string;
+  modelKey: string;
+  textOverlay: string | null;
+  textOverlayPresent: boolean;
+  textPosition: string;
+  textSize: string;
+  hasFace: boolean;
+  faceCount: number;
+  expression: string | null;
+  dominantColors: string[];
+  compositionStyle: string;
+  primarySubject: string | null;
+  objects: string[];
+  visualHook: string | null;
+  whyItWorks: string | null;
+  clarityScore: number | null;
 };
 
 export type HookSummary = {

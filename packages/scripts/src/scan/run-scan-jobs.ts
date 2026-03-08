@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import dotenv from "dotenv";
+import { THUMBNAIL_ANALYSIS_PROGRESS_PREFIX } from "../lib/thumbnail-analysis.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MONOREPO_ROOT = path.resolve(__dirname, "../../../../");
@@ -114,6 +115,8 @@ async function runCommand(
     cwd?: string;
     captureStdout?: boolean;
     captureStderr?: boolean;
+    onStderrChunk?: (chunk: string) => void;
+    onStdoutChunk?: (chunk: string) => void;
     pipeStdout?: boolean;
     pipeStderr?: boolean;
   }
@@ -138,12 +141,14 @@ async function runCommand(
       const text = chunk.toString();
       if (pipeStdout) process.stdout.write(text);
       if (captureStdout) stdoutChunks.push(text);
+      options?.onStdoutChunk?.(text);
     });
 
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       if (pipeStderr) process.stderr.write(text);
       if (captureStderr) stderrChunks.push(text);
+      options?.onStderrChunk?.(text);
     });
 
     child.on("error", (error) => {
@@ -314,6 +319,18 @@ async function getJobById(jobId: string): Promise<ScanJobRow | null> {
   `);
 
   return (result.results?.[0] as ScanJobRow | undefined) ?? null;
+}
+
+async function getWorkspaceIdForJob(jobId: string): Promise<string | null> {
+  const result = await d1ExecuteSql(`
+    SELECT workspace_id
+    FROM scan_jobs
+    WHERE id = ${sqlValue(jobId)}
+    LIMIT 1;
+  `);
+
+  const row = result.results?.[0] as { workspace_id?: string | null } | undefined;
+  return row?.workspace_id ? String(row.workspace_id) : null;
 }
 
 async function createQueuedJob(channelUrl: string, requestedChannelSlug: string | null): Promise<ScanJobRow> {
@@ -601,7 +618,14 @@ async function downloadChannel(
   }
 }
 
-async function buildArtifacts(channelSlug: string, rawRoot: string, outputRoot: string): Promise<void> {
+async function buildArtifacts(
+  channelSlug: string,
+  rawRoot: string,
+  outputRoot: string,
+  options?: { job?: LeasedScanJob; totalVideos?: number | null }
+): Promise<void> {
+  let stdoutBuffer = "";
+
   await runCommand(npmCommand, [
     "--prefix",
     MONOREPO_ROOT,
@@ -615,7 +639,46 @@ async function buildArtifacts(channelSlug: string, rawRoot: string, outputRoot: 
     rawRoot,
     "--output-root",
     outputRoot,
-  ]);
+  ], {
+    onStdoutChunk(chunk) {
+      stdoutBuffer += chunk;
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith(THUMBNAIL_ANALYSIS_PROGRESS_PREFIX)) continue;
+
+        const rawJson = trimmed.slice(THUMBNAIL_ANALYSIS_PROGRESS_PREFIX.length).trim();
+        try {
+          const payload = JSON.parse(rawJson) as {
+            processed?: number;
+            title?: string;
+            total?: number;
+          };
+          if (options?.job && payload.total && Number.isFinite(payload.processed)) {
+            void patchJob(options.job, {
+              stage: "analyzing_thumbnails",
+              progress: Number((0.62 + (Number(payload.processed) / payload.total) * 0.15).toFixed(3)),
+              totalVideos: payload.total,
+              processedVideos: payload.processed,
+              message: `Analyzing thumbnails (${payload.processed}/${payload.total})${payload.title ? ` · ${payload.title}` : ""}`,
+            });
+          }
+        } catch (error) {
+          console.warn("Failed to parse thumbnail analysis progress line", error);
+        }
+      }
+    },
+  });
+}
+
+async function assignChannelToWorkspace(channelSlug: string, workspaceId: string): Promise<void> {
+  await d1ExecuteSql(`
+    UPDATE channels
+    SET workspace_id = ${sqlValue(workspaceId)}
+    WHERE slug = ${sqlValue(channelSlug)};
+  `);
 }
 
 async function upsertVectors(
@@ -742,9 +805,13 @@ async function processJob(job: LeasedScanJob): Promise<void> {
     message: `Downloaded ${totalVideos} videos, building structured artifacts`,
   });
 
-  await buildArtifacts(requestedSlug, paths.rawRoot, paths.outputRoot);
+  await buildArtifacts(requestedSlug, paths.rawRoot, paths.outputRoot, {
+    job,
+    totalVideos: expectedVideos ?? totalVideos,
+  });
 
   const summary = loadSummary(paths.summaryPath);
+  const finalChannelSlug = String(summary.channel?.slug ?? requestedSlug);
   const summaryVideos = summary.totals?.videos ?? totalVideos;
   const summaryChunks = summary.totals?.chunks ?? countNdjsonRecords(paths.transcriptPath);
 
@@ -757,6 +824,11 @@ async function processJob(job: LeasedScanJob): Promise<void> {
   });
 
   await seedD1(paths.seedSqlPath);
+
+  const workspaceId = await getWorkspaceIdForJob(job.id);
+  if (workspaceId) {
+    await assignChannelToWorkspace(finalChannelSlug, workspaceId);
+  }
 
   await patchJob(job, {
     stage: "vectorizing",
@@ -773,8 +845,8 @@ async function processJob(job: LeasedScanJob): Promise<void> {
   await completeJob(job, {
     totalVideos: summaryVideos,
     processedVideos: summaryVideos,
-    message: `Completed ingest for ${summary.channel?.name ?? requestedSlug}`,
-    requestedChannelSlug: requestedSlug,
+    message: `Completed ingest for ${summary.channel?.name ?? finalChannelSlug}`,
+    requestedChannelSlug: finalChannelSlug,
   });
 }
 

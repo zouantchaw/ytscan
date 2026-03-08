@@ -167,7 +167,11 @@ async function leaseJob(jobId?: string): Promise<LeasedGenerationJob | null> {
     "/api/internal/generation-jobs",
     {
       method: "POST",
-      body: JSON.stringify(jobId ? { jobId } : {}),
+      body: JSON.stringify(
+        jobId
+          ? { jobId, jobTypes: ["thumbnail_images", "previs"], providers: ["internal"] }
+          : { jobTypes: ["thumbnail_images", "previs"], providers: ["internal"] }
+      ),
     }
   );
 

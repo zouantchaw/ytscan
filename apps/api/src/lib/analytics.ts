@@ -6,6 +6,7 @@ import type {
   DashboardStats,
   DurationBucketSummary,
   PerformanceBreakdownItem,
+  ThumbnailAnalysisSummary,
   TopicClusterSummary,
   TrendPoint,
 } from "@ytscan/core";
@@ -23,6 +24,7 @@ export type AnalyticsVideo = {
   engagementRate: number;
   performanceTier: string;
   videoUrl: string;
+  thumbnailAnalysis: ThumbnailAnalysisSummary | null;
 };
 
 type TopicAggregate = {

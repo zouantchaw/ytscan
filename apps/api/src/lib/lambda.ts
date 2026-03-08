@@ -44,6 +44,12 @@ type LambdaLaunchResponse = {
   };
 };
 
+type LambdaTerminateResponse = {
+  data?: {
+    terminated_instances?: string[];
+  };
+};
+
 export type LambdaLaunchPlan = {
   instanceTypeDescription: string | null;
   instanceTypeName: string;
@@ -205,6 +211,28 @@ export async function launchLambdaInstance(
 
   return {
     instanceIds: payload.data?.instance_ids ?? [],
+    raw: payload,
+  };
+}
+
+export async function terminateLambdaInstances(
+  env: Env,
+  instanceIds: string[]
+): Promise<{ terminatedInstanceIds: string[]; raw: unknown }> {
+  const cleanedInstanceIds = instanceIds.map((value) => value.trim()).filter(Boolean);
+  if (!cleanedInstanceIds.length) {
+    return { terminatedInstanceIds: [], raw: { skipped: true } };
+  }
+
+  const payload = await lambdaRequest<LambdaTerminateResponse>(env, "/instance-operations/terminate", {
+    body: JSON.stringify({
+      instance_ids: cleanedInstanceIds,
+    }),
+    method: "POST",
+  });
+
+  return {
+    terminatedInstanceIds: payload.data?.terminated_instances ?? cleanedInstanceIds,
     raw: payload,
   };
 }

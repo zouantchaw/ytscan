@@ -34,10 +34,21 @@ function buildTranscriptQuery(video: VideoSummary | null) {
 }
 
 function buildPerformanceScore(video: VideoSummary) {
+  if (video.thumbnailAnalysis?.clarityScore) {
+    return Math.min(99, 45 + video.thumbnailAnalysis.clarityScore * 5);
+  }
   if (video.performanceTier === "viral") return 87;
   if (video.performanceTier === "strong") return 76;
   if (video.performanceTier === "average") return 61;
   return 42;
+}
+
+function titleCase(value: string) {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
 }
 
 function buildTopicTags(video: VideoSummary, dashboard: ChannelDashboard | null) {
@@ -93,6 +104,7 @@ export default function VideoDetailPage() {
   const transcriptPassages = buildTranscriptPassages(transcriptSearch.data?.items ?? [], youtubeId);
   const topicTags = selectedVideo ? buildTopicTags(selectedVideo, dashboard.data) : [];
   const score = selectedVideo ? buildPerformanceScore(selectedVideo) : 0;
+  const thumbnailAnalysis = selectedVideo?.thumbnailAnalysis ?? null;
 
   if (!selectedVideo && !videos.isLoading) {
     return (
@@ -222,11 +234,28 @@ export default function VideoDetailPage() {
               </span>
               <span className="text-[13px] text-muted-foreground">Score: {score}/100</span>
             </div>
-            <div className="grid gap-1 text-[13px] leading-6 text-muted-foreground">
-              <p>Clear value proposition paired with a concrete title.</p>
-              <p>{selectedVideo.performanceTier === "viral" ? "Strong contrast and emotion" : "Solid editorial framing"}.</p>
-              <p>Thumbnail and title create a clear curiosity gap for this topic.</p>
-            </div>
+            {thumbnailAnalysis ? (
+              <div className="grid gap-2 text-[13px] leading-6 text-muted-foreground">
+                <p>{thumbnailAnalysis.whyItWorks ?? "Structured thumbnail analysis available."}</p>
+                {thumbnailAnalysis.visualHook ? <p>{thumbnailAnalysis.visualHook}</p> : null}
+                <p>
+                  {thumbnailAnalysis.textOverlayPresent
+                    ? `Text is present in the ${thumbnailAnalysis.textPosition} region with ${thumbnailAnalysis.textSize} emphasis.`
+                    : "No meaningful text overlay detected in the thumbnail."}
+                </p>
+                <p>
+                  {thumbnailAnalysis.hasFace
+                    ? `${thumbnailAnalysis.faceCount} face${thumbnailAnalysis.faceCount === 1 ? "" : "s"} detected${thumbnailAnalysis.expression ? ` with a ${thumbnailAnalysis.expression} expression` : ""}.`
+                    : "No face detected. The image relies on objects, layout, or text instead."}
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-1 text-[13px] leading-6 text-muted-foreground">
+                <p>Clear value proposition paired with a concrete title.</p>
+                <p>{selectedVideo.performanceTier === "viral" ? "Strong contrast and emotion" : "Solid editorial framing"}.</p>
+                <p>Thumbnail and title create a clear curiosity gap for this topic.</p>
+              </div>
+            )}
           </AppPanel>
 
           <AppPanel className="grid gap-3 px-5 py-5">
@@ -265,6 +294,44 @@ export default function VideoDetailPage() {
               ))}
             </div>
           </AppPanel>
+
+          {thumbnailAnalysis ? (
+            <AppPanel className="grid gap-3 px-5 py-5">
+              <h2 className="font-display text-[16px] font-semibold tracking-[-0.03em] text-foreground">
+                VLM Fields
+              </h2>
+              <div className="grid gap-2 text-[13px] leading-6 text-muted-foreground">
+                <p>
+                  Primary subject:{" "}
+                  <span className="font-medium text-foreground">
+                    {thumbnailAnalysis.primarySubject ?? "Unknown"}
+                  </span>
+                </p>
+                <p>
+                  Composition:{" "}
+                  <span className="font-medium text-foreground">
+                    {titleCase(thumbnailAnalysis.compositionStyle)}
+                  </span>
+                </p>
+                <p>
+                  Colors:{" "}
+                  <span className="font-medium text-foreground">
+                    {thumbnailAnalysis.dominantColors.length
+                      ? thumbnailAnalysis.dominantColors.map(titleCase).join(", ")
+                      : "Not detected"}
+                  </span>
+                </p>
+                <p>
+                  Objects:{" "}
+                  <span className="font-medium text-foreground">
+                    {thumbnailAnalysis.objects.length
+                      ? thumbnailAnalysis.objects.map(titleCase).join(", ")
+                      : "Not detected"}
+                  </span>
+                </p>
+              </div>
+            </AppPanel>
+          ) : null}
 
           <Button asChild variant="dark">
             <Link href={`/app/channels/${slug}/script-lab?topic=${encodeURIComponent(selectedVideo.title)}`}>

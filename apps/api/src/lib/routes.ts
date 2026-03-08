@@ -25,6 +25,7 @@ import type {
   ScriptProjectResponse,
   ScriptProjectSummary,
   ScriptResearchItem,
+  ThumbnailAnalysisSummary,
   ThumbnailBriefVersion,
   VideoSummary,
   WorkspaceSummary,
@@ -42,7 +43,11 @@ import {
 } from "./analytics";
 import { createAuth, getAllowedOrigins } from "./auth";
 import type { Env } from "./env";
-import { launchLambdaInstance, resolveLambdaLaunchPlan } from "./lambda";
+import {
+  launchLambdaInstance,
+  resolveLambdaLaunchPlan,
+  terminateLambdaInstances,
+} from "./lambda";
 import { buildMeResponse, getRequestContext, type RequestContext } from "./request-context";
 import { buildPersonaDatasetLines, generateScriptLabStep } from "./script-lab";
 
@@ -189,6 +194,7 @@ type GenerationJobRow = {
 type InternalGenerationJobRow = GenerationJobRow;
 
 type InternalGenerationJobPatch = {
+  errorMessage?: string | null;
   message?: string | null;
   output?: JsonObject;
   progress?: number;
@@ -231,6 +237,25 @@ type PersonaModelRow = {
   channel_name: string | null;
 };
 
+type ThumbnailAnalysisRow = {
+  thumbnail_provider: string | null;
+  thumbnail_model_key: string | null;
+  thumbnail_text_overlay: string | null;
+  thumbnail_text_overlay_present: number | null;
+  thumbnail_text_position: string | null;
+  thumbnail_text_size: string | null;
+  thumbnail_has_face: number | null;
+  thumbnail_face_count: number | null;
+  thumbnail_expression: string | null;
+  thumbnail_dominant_colors: string | null;
+  thumbnail_composition_style: string | null;
+  thumbnail_primary_subject: string | null;
+  thumbnail_objects_json: string | null;
+  thumbnail_visual_hook: string | null;
+  thumbnail_why_it_works: string | null;
+  thumbnail_clarity_score: number | null;
+};
+
 const BASE_CORS_HEADERS: HeadersInit = {
   "access-control-allow-headers": "Content-Type, Authorization, X-Internal-Token, X-Workspace-Id",
   "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -252,17 +277,33 @@ const CHANNEL_SELECT = `
 `;
 
 const VIDEO_SELECT = `
-  youtube_id,
-  title,
-  upload_date,
-  duration_sec,
-  view_count,
-  like_count,
-  comment_count,
-  description,
-  tags,
-  engagement_rate,
-  performance_tier
+  v.youtube_id,
+  v.title,
+  v.upload_date,
+  v.duration_sec,
+  v.view_count,
+  v.like_count,
+  v.comment_count,
+  v.description,
+  v.tags,
+  v.engagement_rate,
+  v.performance_tier,
+  ta.provider AS thumbnail_provider,
+  ta.model_key AS thumbnail_model_key,
+  ta.text_overlay AS thumbnail_text_overlay,
+  ta.text_overlay_present AS thumbnail_text_overlay_present,
+  ta.text_position AS thumbnail_text_position,
+  ta.text_size AS thumbnail_text_size,
+  ta.has_face AS thumbnail_has_face,
+  ta.face_count AS thumbnail_face_count,
+  ta.expression AS thumbnail_expression,
+  ta.dominant_colors AS thumbnail_dominant_colors,
+  ta.composition_style AS thumbnail_composition_style,
+  ta.primary_subject AS thumbnail_primary_subject,
+  ta.objects_json AS thumbnail_objects_json,
+  ta.visual_hook AS thumbnail_visual_hook,
+  ta.why_it_works AS thumbnail_why_it_works,
+  ta.clarity_score AS thumbnail_clarity_score
 `;
 
 const HOOK_SELECT = `
@@ -469,6 +510,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     if (parts[0] === "api" && parts[1] === "internal") {
       return withCors(await handleInternalRoute(request, parts, env), request, env);
+    }
+
+    if (parts[0] === "api" && parts[1] === "callback") {
+      return withCors(await handleCallbackRoute(request, parts, env), request, env);
     }
 
     const context = await getRequestContext(request, env);
@@ -719,6 +764,60 @@ async function handleInternalRoute(
 
   if (parts[2] !== "scan-jobs") {
     return jsonResponse({ error: "Not found" }, 404);
+  }
+
+  return jsonResponse({ error: "Not found" }, 404);
+}
+
+function readCallbackLeaseToken(
+  request: Request,
+  searchParams?: URLSearchParams,
+  fallback?: unknown
+): string {
+  const headerToken =
+    request.headers.get("x-generation-lease-token")?.trim() ||
+    request.headers.get("x-lease-token")?.trim();
+  if (headerToken) return headerToken;
+
+  if (typeof fallback === "string" && fallback.trim()) {
+    return fallback.trim();
+  }
+
+  return searchParams?.get("leaseToken")?.trim() || "";
+}
+
+async function fetchCallbackGenerationJob(
+  jobId: string,
+  leaseToken: string,
+  env: Env
+): Promise<InternalGenerationJobRow | null> {
+  if (!leaseToken) return null;
+  const job = await fetchInternalGenerationJob(jobId, env);
+  if (!job || job.lease_token !== leaseToken) return null;
+  return job;
+}
+
+async function handleCallbackRoute(
+  request: Request,
+  parts: string[],
+  env: Env
+): Promise<Response> {
+  if (parts[2] !== "generation-jobs" || !parts[3]) {
+    return jsonResponse({ error: "Not found" }, 404);
+  }
+
+  const jobId = decodeURIComponent(parts[3]);
+  const action = parts[4];
+
+  if (request.method === "GET" && action === "dataset") {
+    return getGenerationJobDataset(jobId, request, env);
+  }
+
+  if (request.method === "POST") {
+    if (action === "progress") return patchGenerationJobCallback(jobId, request, env);
+    if (action === "complete") return completeGenerationJobCallback(jobId, request, env);
+    if (action === "fail") return failGenerationJobCallback(jobId, request, env);
+    if (action === "assets") return uploadGenerationAssetCallback(jobId, request, env);
   }
 
   return jsonResponse({ error: "Not found" }, 404);
@@ -1144,6 +1243,85 @@ async function fetchInternalGenerationJob(
   return row ?? null;
 }
 
+async function fetchLatestGenerationAssetByKind(
+  jobId: string,
+  assetKind: string,
+  env: Env
+): Promise<GenerationAssetRow | null> {
+  const row = await env.DB.prepare(
+    `SELECT ${GENERATION_ASSET_SELECT} FROM generation_assets WHERE generation_job_id = ? AND asset_kind = ? ORDER BY created_at DESC LIMIT 1`
+  )
+    .bind(jobId, assetKind)
+    .first<GenerationAssetRow>();
+
+  return row ?? null;
+}
+
+async function syncPersonaModelFromGenerationJob(
+  job: InternalGenerationJobRow,
+  targetStatus: "ready" | "failed",
+  env: Env
+): Promise<void> {
+  if (!job.persona_model_id) return;
+
+  const personaRow = await env.DB.prepare(
+    `SELECT id, metadata_json, adapter_path FROM persona_models WHERE id = ? LIMIT 1`
+  )
+    .bind(job.persona_model_id)
+    .first<{ id: string; metadata_json: string; adapter_path: string | null }>();
+
+  if (!personaRow) return;
+
+  const now = new Date().toISOString();
+  const existingMetadata = parseJsonObject(personaRow.metadata_json);
+  const output = parseJsonObject(job.output_json);
+  const adapterAsset =
+    targetStatus === "ready"
+      ? await fetchLatestGenerationAssetByKind(job.id, "persona_adapter", env)
+      : null;
+  const metricsAsset = await fetchLatestGenerationAssetByKind(job.id, "persona_metrics", env);
+  const nextMetadata = {
+    ...existingMetadata,
+    lastTrainingCompletedAt: now,
+    lastTrainingError:
+      targetStatus === "failed" ? compactMessage(job.error_message ?? job.message) : null,
+    lastTrainingJobId: job.id,
+    lastTrainingOutput: output,
+    latestAdapterAssetId: adapterAsset?.id ?? null,
+    latestMetricsAssetId: metricsAsset?.id ?? null,
+  };
+
+  await env.DB.prepare(
+    `
+      UPDATE persona_models
+      SET
+        status = ?,
+        provider_job_id = ?,
+        adapter_path = ?,
+        metadata_json = ?,
+        updated_at = ?
+      WHERE id = ?
+    `
+  )
+    .bind(
+      targetStatus,
+      job.provider_job_id,
+      targetStatus === "ready" && adapterAsset ? `assets://${adapterAsset.r2_key}` : personaRow.adapter_path,
+      JSON.stringify(nextMetadata),
+      now,
+      job.persona_model_id
+    )
+    .run();
+
+  if (job.provider_job_id) {
+    try {
+      await terminateLambdaInstances(env, [job.provider_job_id]);
+    } catch (error) {
+      console.warn(`Failed to terminate Lambda instance ${job.provider_job_id}:`, error);
+    }
+  }
+}
+
 async function recordGenerationJobEvent(
   jobId: string,
   row: Partial<InternalGenerationJobRow>,
@@ -1182,6 +1360,12 @@ async function recordGenerationJobEvent(
 async function leaseGenerationJob(request: Request, env: Env): Promise<Response> {
   const payload = await readJsonBody<Record<string, unknown>>(request);
   const requestedJobId = String(payload?.jobId ?? "").trim() || null;
+  const providerFilter = Array.isArray(payload?.providers)
+    ? payload.providers.map((value) => String(value).trim()).filter(Boolean)
+    : [];
+  const jobTypeFilter = Array.isArray(payload?.jobTypes)
+    ? payload.jobTypes.map((value) => String(value).trim()).filter(Boolean)
+    : [];
   const now = new Date().toISOString();
   const leaseableWhere = `
     (
@@ -1193,17 +1377,31 @@ async function leaseGenerationJob(request: Request, env: Env): Promise<Response>
       )
     )
   `;
+  const filterClauses: string[] = [];
+  const filterBinds: unknown[] = [];
+
+  if (providerFilter.length) {
+    filterClauses.push(`provider IN (${providerFilter.map(() => "?").join(", ")})`);
+    filterBinds.push(...providerFilter);
+  }
+
+  if (jobTypeFilter.length) {
+    filterClauses.push(`job_type IN (${jobTypeFilter.map(() => "?").join(", ")})`);
+    filterBinds.push(...jobTypeFilter);
+  }
+
+  const filterSql = filterClauses.length ? ` AND ${filterClauses.join(" AND ")}` : "";
 
   const row = requestedJobId
     ? await env.DB.prepare(
-        `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE id = ? AND ${leaseableWhere} LIMIT 1`
+        `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE id = ? AND ${leaseableWhere}${filterSql} LIMIT 1`
       )
-        .bind(requestedJobId, now)
+        .bind(requestedJobId, now, ...filterBinds)
         .first<InternalGenerationJobRow>()
     : await env.DB.prepare(
-        `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE ${leaseableWhere} ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`
+        `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE ${leaseableWhere}${filterSql} ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`
       )
-        .bind(now)
+        .bind(now, ...filterBinds)
         .first<InternalGenerationJobRow>();
 
   if (!row) {
@@ -1270,7 +1468,7 @@ async function heartbeatGenerationJob(
   env: Env
 ): Promise<Response> {
   const payload = await readJsonBody<Record<string, unknown>>(request);
-  const leaseToken = String(payload?.leaseToken ?? "").trim();
+  const leaseToken = readCallbackLeaseToken(request, undefined, payload?.leaseToken);
 
   if (!leaseToken) {
     return jsonResponse({ error: "leaseToken is required" }, 400);
@@ -1377,7 +1575,7 @@ async function updateInternalGenerationJob(
 
 async function patchGenerationJob(jobId: string, request: Request, env: Env): Promise<Response> {
   const payload = await readJsonBody<Record<string, unknown>>(request);
-  const leaseToken = String(payload?.leaseToken ?? "").trim();
+  const leaseToken = readCallbackLeaseToken(request, undefined, payload?.leaseToken);
 
   if (!leaseToken) {
     return jsonResponse({ error: "leaseToken is required" }, 400);
@@ -1392,6 +1590,10 @@ async function patchGenerationJob(jobId: string, request: Request, env: Env): Pr
           payload?.message === undefined || payload?.message === null
             ? undefined
             : String(payload.message),
+        errorMessage:
+          payload?.errorMessage === undefined || payload?.errorMessage === null
+            ? undefined
+            : String(payload.errorMessage),
         output:
           payload?.output === undefined || payload?.output === null
             ? undefined
@@ -1433,7 +1635,7 @@ async function completeGenerationJob(
   env: Env
 ): Promise<Response> {
   const payload = await readJsonBody<Record<string, unknown>>(request);
-  const leaseToken = String(payload?.leaseToken ?? "").trim();
+  const leaseToken = readCallbackLeaseToken(request, undefined, payload?.leaseToken);
 
   if (!leaseToken) {
     return jsonResponse({ error: "leaseToken is required" }, 400);
@@ -1476,12 +1678,15 @@ async function completeGenerationJob(
     .run();
 
   const completed = await fetchInternalGenerationJob(jobId, env);
+  if ((completed ?? updated).job_type === "persona_train") {
+    await syncPersonaModelFromGenerationJob(completed ?? updated, "ready", env);
+  }
   return jsonResponse({ job: { ...toGenerationJobSummary(completed ?? updated), leaseToken: null } });
 }
 
 async function failGenerationJob(jobId: string, request: Request, env: Env): Promise<Response> {
   const payload = await readJsonBody<Record<string, unknown>>(request);
-  const leaseToken = String(payload?.leaseToken ?? "").trim();
+  const leaseToken = readCallbackLeaseToken(request, undefined, payload?.leaseToken);
 
   if (!leaseToken) {
     return jsonResponse({ error: "leaseToken is required" }, 400);
@@ -1492,6 +1697,10 @@ async function failGenerationJob(jobId: string, request: Request, env: Env): Pro
     leaseToken,
     {
       message:
+        payload?.message === undefined || payload?.message === null
+          ? "Generation job failed"
+          : String(payload.message),
+      errorMessage:
         payload?.message === undefined || payload?.message === null
           ? "Generation job failed"
           : String(payload.message),
@@ -1527,6 +1736,9 @@ async function failGenerationJob(jobId: string, request: Request, env: Env): Pro
     .run();
 
   const failed = await fetchInternalGenerationJob(jobId, env);
+  if ((failed ?? updated).job_type === "persona_train") {
+    await syncPersonaModelFromGenerationJob(failed ?? updated, "failed", env);
+  }
   return jsonResponse({ job: { ...toGenerationJobSummary(failed ?? updated), leaseToken: null } });
 }
 
@@ -1544,7 +1756,7 @@ async function uploadGenerationAsset(
   }
 
   const formData = await request.formData();
-  const leaseToken = String(formData.get("leaseToken") ?? "").trim();
+  const leaseToken = readCallbackLeaseToken(request, undefined, formData.get("leaseToken"));
   const assetKind = String(formData.get("assetKind") ?? "").trim();
   const fileName = sanitizeAssetFileName(String(formData.get("fileName") ?? ""));
   const mimeType = String(formData.get("mimeType") ?? "").trim() || "application/octet-stream";
@@ -1647,6 +1859,84 @@ async function uploadGenerationAsset(
   );
 
   return jsonResponse({ asset: toGenerationAssetSummary(row) });
+}
+
+async function getGenerationJobDataset(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const url = new URL(request.url);
+  const leaseToken = readCallbackLeaseToken(request, url.searchParams);
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const job = await fetchCallbackGenerationJob(jobId, leaseToken, env);
+  if (!job) {
+    return jsonResponse({ error: "Generation job not found" }, 404);
+  }
+
+  if (job.job_type !== "persona_train") {
+    return jsonResponse({ error: "Dataset download is only available for persona training jobs" }, 400);
+  }
+
+  const input = parseJsonObject(job.input_json);
+  const datasetPath = typeof input.datasetPath === "string" ? input.datasetPath.trim() : "";
+  if (!datasetPath.startsWith("assets://")) {
+    return jsonResponse({ error: "Dataset asset is unavailable" }, 404);
+  }
+
+  const object = await env.ASSETS.get(datasetPath.slice("assets://".length));
+  if (!object) {
+    return jsonResponse({ error: "Dataset blob not found" }, 404);
+  }
+
+  const headers = new Headers({
+    "cache-control": "no-store",
+    "content-type": "application/x-ndjson; charset=utf-8",
+  });
+
+  return new Response(object.body, {
+    headers,
+    status: 200,
+  });
+}
+
+async function patchGenerationJobCallback(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  return patchGenerationJob(jobId, request, env);
+}
+
+async function completeGenerationJobCallback(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  return completeGenerationJob(jobId, request, env);
+}
+
+async function failGenerationJobCallback(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  return failGenerationJob(jobId, request, env);
+}
+
+async function uploadGenerationAssetCallback(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  return uploadGenerationAsset(jobId, request, env);
 }
 
 function parseTags(rawValue: unknown): string[] {
@@ -1999,6 +2289,7 @@ async function getChannelVideos(
       commentCount: video.commentCount,
       performanceTier: video.performanceTier,
       videoUrl: video.videoUrl,
+      thumbnailAnalysis: video.thumbnailAnalysis,
     }));
 
   const response: ChannelVideosResponse = {
@@ -2147,6 +2438,21 @@ function parseJsonObject(rawValue: string | null | undefined): JsonObject {
   }
 }
 
+function parseJsonStringList(rawValue: string | null | undefined): string[] {
+  if (!rawValue) return [];
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function parseBoolean(rawValue: unknown, fallback = false): boolean {
   if (typeof rawValue === "boolean") return rawValue;
   if (typeof rawValue === "string") {
@@ -2154,6 +2460,37 @@ function parseBoolean(rawValue: unknown, fallback = false): boolean {
     if (rawValue === "false") return false;
   }
   return fallback;
+}
+
+function toThumbnailAnalysisSummary(
+  row: ThumbnailAnalysisRow | Record<string, unknown>
+): ThumbnailAnalysisSummary | null {
+  const modelKey = row.thumbnail_model_key ? String(row.thumbnail_model_key) : null;
+  if (!modelKey) return null;
+
+  return {
+    provider: String(row.thumbnail_provider ?? "gemini"),
+    modelKey,
+    textOverlay: row.thumbnail_text_overlay ? String(row.thumbnail_text_overlay) : null,
+    textOverlayPresent: Boolean(Number(row.thumbnail_text_overlay_present ?? 0)),
+    textPosition: String(row.thumbnail_text_position ?? "none"),
+    textSize: String(row.thumbnail_text_size ?? "none"),
+    hasFace: Boolean(Number(row.thumbnail_has_face ?? 0)),
+    faceCount: Number(row.thumbnail_face_count ?? 0),
+    expression: row.thumbnail_expression ? String(row.thumbnail_expression) : null,
+    dominantColors: parseJsonStringList(
+      row.thumbnail_dominant_colors ? String(row.thumbnail_dominant_colors) : null
+    ),
+    compositionStyle: String(row.thumbnail_composition_style ?? "other"),
+    primarySubject: row.thumbnail_primary_subject ? String(row.thumbnail_primary_subject) : null,
+    objects: parseJsonStringList(row.thumbnail_objects_json ? String(row.thumbnail_objects_json) : null),
+    visualHook: row.thumbnail_visual_hook ? String(row.thumbnail_visual_hook) : null,
+    whyItWorks: row.thumbnail_why_it_works ? String(row.thumbnail_why_it_works) : null,
+    clarityScore:
+      row.thumbnail_clarity_score === null || row.thumbnail_clarity_score === undefined
+        ? null
+        : Number(row.thumbnail_clarity_score),
+  };
 }
 
 function isScriptLabStep(rawValue: string): rawValue is ScriptLabStep {
@@ -3054,8 +3391,8 @@ async function createPersonaModel(
   const channelSlug =
     String(payload?.channelSlug ?? payload?.channel ?? env.DEFAULT_CHANNEL_SLUG ?? "").trim() || null;
   const baseModel =
-    String(payload?.baseModel ?? "meta-llama/Meta-Llama-3-8B-Instruct").trim() ||
-    "meta-llama/Meta-Llama-3-8B-Instruct";
+    String(payload?.baseModel ?? "Qwen/Qwen2.5-7B-Instruct").trim() ||
+    "Qwen/Qwen2.5-7B-Instruct";
 
   if (!channelSlug) {
     return jsonResponse({ error: "channelSlug is required" }, 400);
@@ -3144,6 +3481,61 @@ async function createPersonaModel(
   return getPersonaModel(modelId, context, env);
 }
 
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function buildPersonaTrainingUserData(params: {
+  apiBaseUrl: string;
+  baseModel: string;
+  hfApiToken?: string | null;
+  jobId: string;
+  leaseToken: string;
+  rawBaseUrl: string;
+}): string {
+  const hfFlag = params.hfApiToken?.trim()
+    ? '  --hf-api-token "${HF_API_TOKEN}"'
+    : "";
+  const commandLines = [
+    "python train_persona.py \\",
+    '  --api-base-url "${API_BASE_URL}" \\',
+    '  --job-id "${JOB_ID}" \\',
+    '  --lease-token "${LEASE_TOKEN}" \\',
+    `  --base-model "\${BASE_MODEL}"${hfFlag ? " \\\n" + hfFlag : ""}`,
+  ];
+  const lines = [
+    "#!/bin/bash",
+    "set -euo pipefail",
+    `API_BASE_URL=${shellEscape(params.apiBaseUrl)}`,
+    `BASE_MODEL=${shellEscape(params.baseModel)}`,
+    `JOB_ID=${shellEscape(params.jobId)}`,
+    `LEASE_TOKEN=${shellEscape(params.leaseToken)}`,
+    `RAW_BASE_URL=${shellEscape(params.rawBaseUrl.replace(/\/+$/, ""))}`,
+    `HF_API_TOKEN=${shellEscape(params.hfApiToken?.trim() || "")}`,
+    "notify_fail() {",
+    "  curl -fsSL -X POST \"${API_BASE_URL}/api/callback/generation-jobs/${JOB_ID}/fail\" \\",
+    "    -H 'content-type: application/json' \\",
+    "    -H \"x-generation-lease-token: ${LEASE_TOKEN}\" \\",
+    "    --data '{\"stage\":\"failed\",\"message\":\"Lambda bootstrap failed before training could start.\"}' >/dev/null 2>&1 || true",
+    "}",
+    "trap notify_fail ERR",
+    "apt-get update",
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv ffmpeg zip curl git",
+    "mkdir -p /opt/ytscan-persona",
+    "cd /opt/ytscan-persona",
+    "curl -fsSL \"${RAW_BASE_URL}/infrastructure/lambda/persona/requirements.txt\" -o requirements.txt",
+    "curl -fsSL \"${RAW_BASE_URL}/infrastructure/lambda/persona/train_persona.py\" -o train_persona.py",
+    "python3 -m venv .venv",
+    "source .venv/bin/activate",
+    "python -m pip install --upgrade pip wheel setuptools",
+    "python -m pip install --extra-index-url https://download.pytorch.org/whl/cu124 torch torchvision torchaudio",
+    "python -m pip install -r requirements.txt",
+    ...commandLines,
+  ];
+
+  return `${lines.join("\n")}\n`;
+}
+
 async function trainPersonaModel(
   modelId: string,
   request: Request,
@@ -3155,6 +3547,10 @@ async function trainPersonaModel(
 
   const payload = await readJsonBody<Record<string, unknown>>(request);
   const launchInstance = parseBoolean(payload?.launchInstance, false);
+  const apiBaseUrl = new URL(request.url).origin.replace(/\/+$/, "");
+  const rawBaseUrl =
+    env.LAMBDA_TRAINING_REPO_RAW_BASE?.trim().replace(/\/+$/, "") ||
+    "https://raw.githubusercontent.com/zouantchaw/ytscan/main";
 
   let launchPlan;
   try {
@@ -3178,6 +3574,9 @@ async function trainPersonaModel(
     launchPlan = null;
   }
 
+  const callbackLeaseToken = crypto.randomUUID();
+  const callbackLeaseExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
   const job = await createGenerationJob(
     {
       jobType: "persona_train",
@@ -3187,18 +3586,33 @@ async function trainPersonaModel(
       provider: "lambda",
       providerJobId: null,
       status: launchInstance ? "provisioning" : "queued",
+      stage: launchInstance ? "provisioning" : "queued",
       input: {
+        apiBaseUrl,
         baseModel: personaModel.base_model,
+        callbackLeaseExpiresAt,
         channelSlug: personaModel.channel_slug,
         datasetPath: personaModel.dataset_path,
+        hfTokenConfigured: Boolean(env.HF_API_TOKEN?.trim()),
         launchInstance,
         launchPlan,
+        rawBaseUrl,
       },
       personaModelId: personaModel.id,
     },
     context,
     env
   );
+
+  await env.DB.prepare(
+    `
+      UPDATE generation_jobs
+      SET lease_token = ?, lease_expires_at = ?, updated_at = ?
+      WHERE id = ? AND workspace_id = ?
+    `
+  )
+    .bind(callbackLeaseToken, callbackLeaseExpiresAt, new Date().toISOString(), job.id, context.workspace.id)
+    .run();
 
   let nextStatus = launchInstance ? "training" : "queued";
   let providerJobId: string | null = null;
@@ -3214,24 +3628,44 @@ async function trainPersonaModel(
           { key: "job_type", value: "persona_train" },
           { key: "workspace_id", value: context.workspace.id },
         ],
+        userData: buildPersonaTrainingUserData({
+          apiBaseUrl,
+          baseModel: personaModel.base_model,
+          hfApiToken: env.HF_API_TOKEN ?? null,
+          jobId: job.id,
+          leaseToken: callbackLeaseToken,
+          rawBaseUrl,
+        }),
       });
 
       providerJobId = launchResult.instanceIds[0] ?? null;
+      const now = new Date().toISOString();
       await env.DB.prepare(
         `
           UPDATE generation_jobs
-          SET provider_job_id = ?, status = 'running', progress = ?, output_json = ?, updated_at = ?
+          SET
+            provider_job_id = ?,
+            status = 'running',
+            stage = 'training',
+            progress = ?,
+            output_json = ?,
+            message = ?,
+            started_at = COALESCE(started_at, ?),
+            updated_at = ?
           WHERE id = ? AND workspace_id = ?
         `
       )
         .bind(
           providerJobId,
-          0.1,
+          0.12,
           JSON.stringify({
+            callbackLeaseExpiresAt,
             launchPlan,
             launchResult: launchResult.raw,
           }),
-          new Date().toISOString(),
+          "Provisioned Lambda instance and started persona training bootstrap",
+          now,
+          now,
           job.id,
           context.workspace.id
         )
@@ -3239,19 +3673,31 @@ async function trainPersonaModel(
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : "Lambda launch failed";
       nextStatus = "failed";
+      const failedAt = new Date().toISOString();
       await env.DB.prepare(
         `
           UPDATE generation_jobs
-          SET status = 'failed', error_message = ?, output_json = ?, updated_at = ?
+          SET
+            status = 'failed',
+            stage = 'failed',
+            message = ?,
+            error_message = ?,
+            output_json = ?,
+            lease_token = NULL,
+            lease_expires_at = NULL,
+            completed_at = ?,
+            updated_at = ?
           WHERE id = ? AND workspace_id = ?
         `
       )
         .bind(
           errorMessage,
+          errorMessage,
           JSON.stringify({
             launchPlan,
           }),
-          new Date().toISOString(),
+          failedAt,
+          failedAt,
           job.id,
           context.workspace.id
         )
@@ -3616,7 +4062,11 @@ async function getChannelAnalytics(
   if (!channel) return null;
 
   const { results = [] } = await env.DB.prepare(
-    `SELECT ${VIDEO_SELECT} FROM videos WHERE channel_id = ? ORDER BY upload_date DESC`
+    `SELECT ${VIDEO_SELECT}
+     FROM videos v
+     LEFT JOIN thumbnail_analyses ta ON ta.video_id = v.id
+     WHERE v.channel_id = ?
+     ORDER BY v.upload_date DESC`
   )
     .bind(channel.id)
     .all<Record<string, unknown>>();
@@ -3634,6 +4084,7 @@ async function getChannelAnalytics(
     engagementRate: Number(row.engagement_rate ?? 0),
     performanceTier: String(row.performance_tier ?? "average"),
     videoUrl: buildVideoUrl(String(row.youtube_id)),
+    thumbnailAnalysis: toThumbnailAnalysisSummary(row),
   }));
 
   const totalViews = videos.reduce((sum, video) => sum + video.viewCount, 0);
@@ -3691,6 +4142,7 @@ function buildTopVideos(videos: AnalyticsVideo[], limit: number): VideoSummary[]
       commentCount: video.commentCount,
       performanceTier: video.performanceTier,
       videoUrl: video.videoUrl,
+      thumbnailAnalysis: video.thumbnailAnalysis,
     }));
 }
 

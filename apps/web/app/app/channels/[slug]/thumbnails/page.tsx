@@ -13,12 +13,59 @@ import {
   formatUploadDate,
 } from "@/lib/formatters";
 
+function titleCase(value: string) {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
 function buildPatternInsights(video: VideoSummary) {
-  const insights = [
-    `${video.performanceTier === "viral" ? "High-performing" : "Steady"} thumbnail paired with a direct, concrete promise in the title.`,
-    `${formatCompactNumber(video.viewCount)} views suggests this framing is worth reusing for similar topics.`,
-    `Runtime of ${formatDuration(video.durationSec)} fits the channel's long-form editorial style.`,
-  ];
+  const analysis = video.thumbnailAnalysis;
+  const insights: string[] = [];
+
+  if (analysis?.visualHook) {
+    insights.push(analysis.visualHook);
+  }
+
+  if (analysis?.whyItWorks) {
+    insights.push(analysis.whyItWorks);
+  }
+
+  if (analysis?.textOverlayPresent) {
+    insights.push(
+      analysis.textOverlay
+        ? `Visible text: “${analysis.textOverlay}” with ${analysis.textSize} treatment in the ${analysis.textPosition} region.`
+        : `Text is present with ${analysis.textSize} treatment in the ${analysis.textPosition} region.`
+    );
+  }
+
+  if (analysis?.hasFace) {
+    insights.push(
+      analysis.expression
+        ? `${analysis.faceCount} face${analysis.faceCount === 1 ? "" : "s"} detected with a ${analysis.expression} expression.`
+        : `${analysis.faceCount} face${analysis.faceCount === 1 ? "" : "s"} detected in the frame.`
+    );
+  }
+
+  if (analysis?.compositionStyle && analysis.compositionStyle !== "other") {
+    insights.push(`Composition style: ${titleCase(analysis.compositionStyle)}.`);
+  }
+
+  if (analysis?.dominantColors.length) {
+    insights.push(`Dominant colors: ${analysis.dominantColors.map(titleCase).join(", ")}.`);
+  }
+
+  if (!insights.length) {
+    insights.push(
+      `${video.performanceTier === "viral" ? "High-performing" : "Steady"} thumbnail paired with a direct, concrete promise in the title.`
+    );
+    insights.push(
+      `${formatCompactNumber(video.viewCount)} views suggests this framing is worth reusing for similar topics.`
+    );
+    insights.push(`Runtime of ${formatDuration(video.durationSec)} fits the channel's long-form editorial style.`);
+  }
 
   return insights;
 }
@@ -143,6 +190,43 @@ export default function ThumbnailGalleryPage() {
                         <p key={insight}>{insight}</p>
                       ))}
                     </div>
+                  </div>
+                  <div className="border-t border-separator pt-4">
+                    <p className="mb-3 text-[15px] font-semibold text-foreground">Detected Elements</p>
+                    {selectedVideo.thumbnailAnalysis ? (
+                      <div className="grid gap-2 text-sm text-muted-foreground">
+                        <p className="flex items-center justify-between gap-4">
+                          <span>Primary subject</span>
+                          <span className="font-medium text-foreground">
+                            {selectedVideo.thumbnailAnalysis.primarySubject ?? "Unknown"}
+                          </span>
+                        </p>
+                        <p className="flex items-center justify-between gap-4">
+                          <span>Composition</span>
+                          <span className="font-medium text-foreground">
+                            {titleCase(selectedVideo.thumbnailAnalysis.compositionStyle)}
+                          </span>
+                        </p>
+                        <p className="flex items-center justify-between gap-4">
+                          <span>Clarity</span>
+                          <span className="font-medium text-foreground">
+                            {selectedVideo.thumbnailAnalysis.clarityScore
+                              ? `${selectedVideo.thumbnailAnalysis.clarityScore}/10`
+                              : "Not scored"}
+                          </span>
+                        </p>
+                        <p className="text-[13px] leading-6">
+                          Objects:{" "}
+                          {selectedVideo.thumbnailAnalysis.objects.length
+                            ? selectedVideo.thumbnailAnalysis.objects.map(titleCase).join(", ")
+                            : "No strong objects detected."}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        This thumbnail has not been run through the VLM analysis pipeline yet.
+                      </p>
+                    )}
                   </div>
                   <Button asChild variant="outline">
                     <Link href={`/app/channels/${slug}/videos/${selectedVideo.youtubeId}`}>

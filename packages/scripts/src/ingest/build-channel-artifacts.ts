@@ -2,6 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import dotenv from "dotenv";
+import {
+  analyzeThumbnail,
+  loadThumbnailAnalysisCache,
+  persistThumbnailAnalysisCache,
+  THUMBNAIL_ANALYSIS_PROGRESS_PREFIX,
+  type ThumbnailAnalysisRecord,
+} from "../lib/thumbnail-analysis.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MONOREPO_ROOT = path.resolve(__dirname, "../../../../");
@@ -9,6 +17,9 @@ const DEFAULT_CHANNEL_SLUG = "codie-sanchez";
 const DEFAULT_SOURCE_ROOT = path.resolve(MONOREPO_ROOT, "data/channels/codie-sanchez/raw");
 const DEFAULT_OUTPUT_ROOT = path.resolve(MONOREPO_ROOT, "data/channels/codie-sanchez/exports");
 const WORDS_PER_CHUNK = 320;
+
+dotenv.config({ path: path.resolve(MONOREPO_ROOT, ".env.local") });
+dotenv.config({ path: path.resolve(MONOREPO_ROOT, ".env") });
 
 type InfoJson = {
   id: string;
@@ -71,6 +82,7 @@ type VideoArtifact = {
   hookText: string;
   hookWordCount: number;
   hookType: string;
+  thumbnailAnalysis: ThumbnailAnalysisRecord | null;
   chunks: ChunkRecord[];
 };
 
@@ -320,10 +332,21 @@ function buildChunks(
   return chunks;
 }
 
-function buildSql(channelSlug: string, channelName: string, channelUrl: string, channelYoutubeId: string | null, subscriberCount: number | null, scanDate: string, videos: VideoArtifact[]): string {
+function buildSql(
+  channelSlug: string,
+  channelName: string,
+  channelUrl: string,
+  channelYoutubeId: string | null,
+  subscriberCount: number | null,
+  scanDate: string,
+  videos: VideoArtifact[]
+): string {
   const lines: string[] = [];
   lines.push("PRAGMA foreign_keys = ON;");
   lines.push("");
+  lines.push("DELETE FROM thumbnail_analyses WHERE video_id IN (");
+  lines.push(`  SELECT id FROM videos WHERE channel_id IN (SELECT id FROM channels WHERE slug = ${sqlValue(channelSlug)})`);
+  lines.push(");");
   lines.push("DELETE FROM transcript_chunks WHERE video_id IN (");
   lines.push(`  SELECT id FROM videos WHERE channel_id IN (SELECT id FROM channels WHERE slug = ${sqlValue(channelSlug)})`);
   lines.push(");");
@@ -389,6 +412,56 @@ function buildSql(channelSlug: string, channelName: string, channelUrl: string, 
   ${sqlValue(video.hookType)}
 );`
     );
+
+    if (video.thumbnailAnalysis) {
+      lines.push(
+        `INSERT INTO thumbnail_analyses (
+  id,
+  video_id,
+  provider,
+  model_key,
+  text_overlay,
+  text_overlay_present,
+  text_position,
+  text_size,
+  has_face,
+  face_count,
+  expression,
+  dominant_colors,
+  composition_style,
+  primary_subject,
+  objects_json,
+  visual_hook,
+  why_it_works,
+  clarity_score,
+  analysis_json,
+  created_at,
+  updated_at
+) VALUES (
+  ${sqlValue(`${channelSlug}:${video.youtubeId}`)},
+  (SELECT id FROM videos WHERE youtube_id = ${sqlValue(video.youtubeId)}),
+  ${sqlValue(video.thumbnailAnalysis.provider)},
+  ${sqlValue(video.thumbnailAnalysis.modelKey)},
+  ${sqlValue(video.thumbnailAnalysis.textOverlay)},
+  ${sqlValue(video.thumbnailAnalysis.textOverlayPresent ? 1 : 0)},
+  ${sqlValue(video.thumbnailAnalysis.textPosition)},
+  ${sqlValue(video.thumbnailAnalysis.textSize)},
+  ${sqlValue(video.thumbnailAnalysis.hasFace ? 1 : 0)},
+  ${sqlValue(video.thumbnailAnalysis.faceCount)},
+  ${sqlValue(video.thumbnailAnalysis.expression)},
+  ${sqlValue(JSON.stringify(video.thumbnailAnalysis.dominantColors))},
+  ${sqlValue(video.thumbnailAnalysis.compositionStyle)},
+  ${sqlValue(video.thumbnailAnalysis.primarySubject)},
+  ${sqlValue(JSON.stringify(video.thumbnailAnalysis.objects))},
+  ${sqlValue(video.thumbnailAnalysis.visualHook)},
+  ${sqlValue(video.thumbnailAnalysis.whyItWorks)},
+  ${sqlValue(video.thumbnailAnalysis.clarityScore)},
+  ${sqlValue(JSON.stringify(video.thumbnailAnalysis))},
+  ${sqlValue(scanDate)},
+  ${sqlValue(scanDate)}
+);`
+      );
+    }
 
     for (const chunk of video.chunks) {
       lines.push(
@@ -499,48 +572,6 @@ async function main(): Promise<void> {
     }))
   );
 
-  const videos: VideoArtifact[] = infoRecords.map(({ directory, info, srtPath, thumbnailPath }) => {
-    const entries = parseSrt(fs.readFileSync(srtPath, "utf-8"));
-    const segments = dedupeRollingCaptions(entries);
-    const hookSegments = segments.filter((segment) => segment.startTime < 60);
-    const uploadDate = normalizeUploadDate(info.upload_date);
-    const hookText = sanitizeTranscriptText(hookSegments.map((segment) => segment.text).join(" "));
-    const hookWordCount = splitWords(hookText).length;
-    const performanceTier = performanceTiers.get(info.id) ?? "average";
-    const chunks = buildChunks(
-      info.id,
-      info.title,
-      uploadDate,
-      info.view_count ?? 0,
-      performanceTier,
-      segments
-    );
-
-    return {
-      youtubeId: info.id,
-      title: info.title,
-      uploadDate,
-      durationSec: info.duration ?? 0,
-      viewCount: info.view_count ?? 0,
-      likeCount: info.like_count ?? 0,
-      commentCount: info.comment_count ?? 0,
-      description: info.description ?? "",
-      tagsJson: JSON.stringify(info.tags ?? []),
-      engagementRate:
-        info.view_count && info.view_count > 0
-          ? Number((((info.like_count ?? 0) + (info.comment_count ?? 0)) / info.view_count).toFixed(6))
-          : 0,
-      performanceTier,
-      thumbnailPath: toPosixRelative(thumbnailPath),
-      transcriptPath: toPosixRelative(srtPath),
-      sourcePath: toPosixRelative(directory),
-      hookText,
-      hookWordCount,
-      hookType: detectHookType(hookText),
-      chunks,
-    };
-  });
-
   const fallbackInfo = infoRecords[0]?.info;
   if (!fallbackInfo) {
     throw new Error(`No video records found in ${sourceRoot}`);
@@ -566,6 +597,100 @@ async function main(): Promise<void> {
   const seedSqlPath = path.join(outputRoot, `${channelSlug}.seed.sql`);
   const transcriptNdjsonPath = path.join(outputRoot, `${channelSlug}.transcript-chunks.ndjson`);
   const summaryPath = path.join(outputRoot, `${channelSlug}.summary.json`);
+  const thumbnailAnalysisPath = path.join(outputRoot, `${channelSlug}.thumbnail-analysis.json`);
+
+  const thumbnailAnalysisCache = loadThumbnailAnalysisCache(thumbnailAnalysisPath);
+  const videos: VideoArtifact[] = [];
+
+  for (let index = 0; index < infoRecords.length; index += 1) {
+    const { directory, info, srtPath, thumbnailPath } = infoRecords[index];
+    const entries = parseSrt(fs.readFileSync(srtPath, "utf-8"));
+    const segments = dedupeRollingCaptions(entries);
+    const hookSegments = segments.filter((segment) => segment.startTime < 60);
+    const uploadDate = normalizeUploadDate(info.upload_date);
+    const hookText = sanitizeTranscriptText(hookSegments.map((segment) => segment.text).join(" "));
+    const hookWordCount = splitWords(hookText).length;
+    const performanceTier = performanceTiers.get(info.id) ?? "average";
+    const chunks = buildChunks(
+      info.id,
+      info.title,
+      uploadDate,
+      info.view_count ?? 0,
+      performanceTier,
+      segments
+    );
+
+    const relativeThumbnailPath = toPosixRelative(thumbnailPath);
+    let thumbnailAnalysis =
+      thumbnailAnalysisCache.get(info.id)?.sourceThumbnailPath === relativeThumbnailPath
+        ? thumbnailAnalysisCache.get(info.id)?.analysis ?? null
+        : null;
+
+    if (!thumbnailAnalysis && process.env.GEMINI_API_KEY?.trim()) {
+      console.log(
+        `${THUMBNAIL_ANALYSIS_PROGRESS_PREFIX} ${JSON.stringify({
+          processed: index,
+          stage: "starting",
+          title: info.title,
+          total: infoRecords.length,
+          youtubeId: info.id,
+        })}`
+      );
+
+      thumbnailAnalysis = await analyzeThumbnail({
+        channelName: String(
+          channelMeta?.channel ?? channelMeta?.title ?? info.channel ?? "Unknown channel"
+        ),
+        thumbnailPath,
+        title: info.title,
+      });
+
+      thumbnailAnalysisCache.set(info.id, {
+        analysis: thumbnailAnalysis,
+        analyzedAt: new Date().toISOString(),
+        sourceThumbnailPath: relativeThumbnailPath,
+        youtubeId: info.id,
+      });
+      persistThumbnailAnalysisCache(thumbnailAnalysisPath, thumbnailAnalysisCache);
+    }
+
+    if (process.env.GEMINI_API_KEY?.trim()) {
+      console.log(
+        `${THUMBNAIL_ANALYSIS_PROGRESS_PREFIX} ${JSON.stringify({
+          processed: index + 1,
+          stage: "completed",
+          title: info.title,
+          total: infoRecords.length,
+          youtubeId: info.id,
+        })}`
+      );
+    }
+
+    videos.push({
+      youtubeId: info.id,
+      title: info.title,
+      uploadDate,
+      durationSec: info.duration ?? 0,
+      viewCount: info.view_count ?? 0,
+      likeCount: info.like_count ?? 0,
+      commentCount: info.comment_count ?? 0,
+      description: info.description ?? "",
+      tagsJson: JSON.stringify(info.tags ?? []),
+      engagementRate:
+        info.view_count && info.view_count > 0
+          ? Number((((info.like_count ?? 0) + (info.comment_count ?? 0)) / info.view_count).toFixed(6))
+          : 0,
+      performanceTier,
+      thumbnailPath: relativeThumbnailPath,
+      transcriptPath: toPosixRelative(srtPath),
+      sourcePath: toPosixRelative(directory),
+      hookText,
+      hookWordCount,
+      hookType: detectHookType(hookText),
+      thumbnailAnalysis,
+      chunks,
+    });
+  }
 
   const allChunks = videos.flatMap((video) => video.chunks);
   fs.writeFileSync(
@@ -607,6 +732,7 @@ async function main(): Promise<void> {
         totals: {
           videos: videos.length,
           chunks: allChunks.length,
+          analyzedThumbnails: videos.filter((video) => video.thumbnailAnalysis).length,
           totalViews: videos.reduce((sum, video) => sum + video.viewCount, 0),
         },
       },
@@ -619,6 +745,9 @@ async function main(): Promise<void> {
   console.log(`  seed SQL: ${seedSqlPath}`);
   console.log(`  transcript NDJSON: ${transcriptNdjsonPath}`);
   console.log(`  summary JSON: ${summaryPath}`);
+  if (process.env.GEMINI_API_KEY?.trim()) {
+    console.log(`  thumbnail analysis JSON: ${thumbnailAnalysisPath}`);
+  }
 }
 
 main().catch((error) => {
