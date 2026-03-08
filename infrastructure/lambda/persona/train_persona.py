@@ -168,7 +168,6 @@ def tokenize_dataset(dataset: Dataset, tokenizer: AutoTokenizer) -> Dataset:
             max_length=1024,
             padding=False,
         )
-        encoded["labels"] = list(encoded["input_ids"])
         return encoded
 
     return dataset.map(tokenize_row, remove_columns=["text"])
