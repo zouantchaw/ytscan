@@ -1,8 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import { useSearchParams, useParams, useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import type {
+  GenerationAssetSummary,
   GenerationJobSummary,
   PersonaModelListResponse,
   ScriptLabStep,
@@ -17,7 +19,7 @@ import {
   type ScriptLabViewStep,
 } from "@/components/app/script-lab-workflow";
 import { Button } from "@/components/ui/button";
-import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
+import { buildBackendUrl, fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import {
   formatCompactNumber,
   formatRelativeDate,
@@ -60,6 +62,28 @@ function findLatestOutput(
   return project.outputs.find((output) => output.step === step) ?? null;
 }
 
+function findLatestGenerationJob(
+  project: ScriptProjectDetail,
+  jobType: string
+): GenerationJobSummary | null {
+  return project.generationJobs.find((job) => job.jobType === jobType) ?? null;
+}
+
+function findJobAssets(
+  project: ScriptProjectDetail,
+  job: GenerationJobSummary | null,
+  assetKind: string
+): GenerationAssetSummary[] {
+  const scopedAssets = job
+    ? project.generatedAssets.filter(
+        (asset) => asset.generationJobId === job.id && asset.assetKind === assetKind
+      )
+    : [];
+
+  if (scopedAssets.length) return scopedAssets;
+  return project.generatedAssets.filter((asset) => asset.assetKind === assetKind);
+}
+
 function getDefaultStep(project: ScriptProjectDetail): ScriptLabViewStep {
   if (project.outputs.some((output) => output.step === "script")) return "script";
   if (project.outputs.some((output) => output.step === "hooks")) return "hooks";
@@ -68,9 +92,11 @@ function getDefaultStep(project: ScriptProjectDetail): ScriptLabViewStep {
 }
 
 function OutputBody({
+  project,
   step,
   output,
 }: {
+  project: ScriptProjectDetail;
   step: ScriptLabViewStep;
   output: ScriptOutputVersion | ThumbnailBriefVersion | GenerationJobSummary | null;
 }) {
@@ -78,19 +104,153 @@ function OutputBody({
     return null;
   }
 
-  if (step === "previs" && output && "jobType" in output) {
+  if (step === "thumbnail_brief") {
+    const thumbnailJob = findLatestGenerationJob(project, "thumbnail_images");
+    const thumbnailAssets = findJobAssets(project, thumbnailJob, "thumbnail_image");
+
     return (
-      <div className="space-y-4 rounded-[12px] border border-border bg-card px-6 py-6">
-        <p className="text-[15px] leading-7 text-foreground">
-          Previsualization is {output.status}. This generation job is ready for the previs pipeline to pick up.
-        </p>
-        <div className="grid gap-2 text-sm text-muted-foreground">
-          <p>Status: <span className="font-medium text-foreground">{output.status}</span></p>
-          <p>Progress: <span className="font-medium text-foreground">{Math.round(output.progress * 100)}%</span></p>
-          {output.providerJobId ? (
-            <p>Provider job: <span className="font-medium text-foreground">{output.providerJobId}</span></p>
-          ) : null}
+      <div className="grid gap-6">
+        {output && "content" in output ? (
+          <div className="rounded-[12px] border border-border bg-card px-6 py-6">
+            <div className="whitespace-pre-wrap text-[15px] leading-8 text-foreground">
+              {output.content}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="space-y-4 rounded-[12px] border border-border bg-card px-6 py-6">
+          <div className="grid gap-2 text-sm text-muted-foreground">
+            <p>
+              Status:{" "}
+              <span className="font-medium text-foreground">
+                {thumbnailJob?.status ?? "idle"}
+              </span>
+            </p>
+            <p>
+              Stage:{" "}
+              <span className="font-medium text-foreground">
+                {thumbnailJob?.stage ?? "waiting"}
+              </span>
+            </p>
+            <p>
+              Progress:{" "}
+              <span className="font-medium text-foreground">
+                {Math.round((thumbnailJob?.progress ?? 0) * 100)}%
+              </span>
+            </p>
+            {thumbnailJob?.message ? (
+              <p>
+                Message:{" "}
+                <span className="font-medium text-foreground">{thumbnailJob.message}</span>
+              </p>
+            ) : null}
+          </div>
+
+          {thumbnailAssets.length ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {thumbnailAssets.map((asset) => (
+                  <div key={asset.id} className="grid gap-3">
+                    <Image
+                      src={buildBackendUrl(asset.downloadPath)}
+                      alt={asset.variant ?? asset.fileName}
+                      width={1280}
+                      height={720}
+                      unoptimized
+                      className="aspect-video w-full rounded-[10px] border border-border object-cover"
+                    />
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-foreground">
+                        {asset.variant?.replace(/-/g, " ") ?? asset.fileName}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatRelativeDate(asset.createdAt)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Generated thumbnail variants will appear here once the media worker finishes.
+            </p>
+          )}
         </div>
+      </div>
+    );
+  }
+
+  if (step === "previs" && output && "jobType" in output) {
+    const previsFrames = findJobAssets(project, output, "previs_frame");
+    const previsVideo = findJobAssets(project, output, "previs_video")[0] ?? null;
+
+    return (
+      <div className="space-y-6 rounded-[12px] border border-border bg-card px-6 py-6">
+        <div className="space-y-4">
+          <p className="text-[15px] leading-7 text-foreground">
+            Previsualization is {output.status}. This panel shows the live state of the rough-cut render pipeline.
+          </p>
+          <div className="grid gap-2 text-sm text-muted-foreground">
+            <p>
+              Status: <span className="font-medium text-foreground">{output.status}</span>
+            </p>
+            <p>
+              Stage: <span className="font-medium text-foreground">{output.stage}</span>
+            </p>
+            <p>
+              Progress:{" "}
+              <span className="font-medium text-foreground">{Math.round(output.progress * 100)}%</span>
+            </p>
+            {output.message ? (
+              <p>
+                Message: <span className="font-medium text-foreground">{output.message}</span>
+              </p>
+            ) : null}
+            {output.providerJobId ? (
+              <p>
+                Provider job: <span className="font-medium text-foreground">{output.providerJobId}</span>
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        {previsVideo ? (
+          <div className="grid gap-4">
+            <video
+              controls
+              className="aspect-video w-full rounded-[10px] border border-border bg-black"
+              src={buildBackendUrl(previsVideo.downloadPath)}
+            />
+            <p className="text-sm text-muted-foreground">
+              Rough cut generated {formatRelativeDate(previsVideo.createdAt)}.
+            </p>
+          </div>
+        ) : null}
+
+        {previsFrames.length ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {previsFrames.map((asset) => (
+              <div key={asset.id} className="grid gap-3">
+                <Image
+                  src={buildBackendUrl(asset.downloadPath)}
+                  alt={asset.variant ?? asset.fileName}
+                  width={1280}
+                  height={720}
+                  unoptimized
+                  className="aspect-video w-full rounded-[10px] border border-border object-cover"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {asset.variant?.replace(/-/g, " ") ?? asset.fileName}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {!previsVideo && !previsFrames.length ? (
+          <p className="text-sm text-muted-foreground">
+            Storyboard frames and the rough MP4 will appear here once rendering begins.
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -117,7 +277,8 @@ export default function ScriptLabProjectPage() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const projectResponse = useBackendQuery<ScriptProjectResponse>(
-    `/script-lab/projects/${encodeURIComponent(projectId)}`
+    `/script-lab/projects/${encodeURIComponent(projectId)}`,
+    { pollMs: 5000 }
   );
   const personaModels = useBackendQuery<PersonaModelListResponse>("/persona-models");
 
@@ -282,7 +443,7 @@ export default function ScriptLabProjectPage() {
 
             {activeStep !== "topic_input" && activeStep !== "research" ? (
               output ? (
-                <OutputBody step={activeStep} output={output} />
+                <OutputBody project={project} step={activeStep} output={output} />
               ) : (
                 <EmptyState
                   title={`No ${outputStepLabels[activeStep].toLowerCase()} yet`}

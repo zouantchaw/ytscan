@@ -280,13 +280,31 @@ export type GenerationJobSummary = {
   provider: string;
   providerJobId: string | null;
   status: string;
+  stage: string;
   progress: number;
   input: JsonObject;
   output: JsonObject;
+  message: string | null;
   errorMessage: string | null;
   createdByUserId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type GenerationAssetSummary = {
+  id: string;
+  projectId: string | null;
+  generationJobId: string | null;
+  assetKind: string;
+  variant: string | null;
+  mimeType: string;
+  fileName: string;
+  byteSize: number | null;
+  metadata: JsonObject;
+  createdAt: string;
+  downloadPath: string;
 };
 
 export type ScriptProjectSummary = {
@@ -309,6 +327,7 @@ export type ScriptProjectDetail = ScriptProjectSummary & {
   outputs: ScriptOutputVersion[];
   thumbnailBriefs: ThumbnailBriefVersion[];
   generationJobs: GenerationJobSummary[];
+  generatedAssets: GenerationAssetSummary[];
 };
 
 export type ScriptProjectListResponse = {

@@ -5,6 +5,7 @@ import type {
   ChannelTopicsResponse,
   ChannelTrendsResponse,
   ChannelVideosResponse,
+  GenerationAssetSummary,
   GenerationJobSummary,
   HookLibraryResponse,
   HookSummary,
@@ -170,13 +171,45 @@ type GenerationJobRow = {
   provider: string;
   provider_job_id: string | null;
   status: string;
+  stage: string;
   progress: number;
   input_json: string;
   output_json: string;
+  message: string | null;
   error_message: string | null;
   created_by_user_id: string | null;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type InternalGenerationJobRow = GenerationJobRow;
+
+type InternalGenerationJobPatch = {
+  message?: string | null;
+  output?: JsonObject;
+  progress?: number;
+  providerJobId?: string | null;
+  stage?: string;
+  status?: string;
+};
+
+type GenerationAssetRow = {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  generation_job_id: string | null;
+  asset_kind: string;
+  variant: string | null;
+  mime_type: string;
+  file_name: string;
+  byte_size: number | null;
+  r2_key: string;
+  metadata_json: string;
+  created_at: string;
 };
 
 type PersonaModelRow = {
@@ -359,13 +392,34 @@ const GENERATION_JOB_SELECT = `
   provider,
   provider_job_id,
   status,
+  stage,
   progress,
   input_json,
   output_json,
+  message,
   error_message,
   created_by_user_id,
+  lease_token,
+  lease_expires_at,
+  started_at,
+  completed_at,
   created_at,
   updated_at
+`;
+
+const GENERATION_ASSET_SELECT = `
+  id,
+  workspace_id,
+  project_id,
+  generation_job_id,
+  asset_kind,
+  variant,
+  mime_type,
+  file_name,
+  byte_size,
+  r2_key,
+  metadata_json,
+  created_at
 `;
 
 const PERSONA_MODEL_SELECT = `
@@ -440,6 +494,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     if (parts[0] === "api" && parts[1] === "generation-jobs" && parts[2] && request.method === "GET") {
       return withCors(await getGenerationJob(parts[2], context, env), request, env);
+    }
+
+    if (parts[0] === "api" && parts[1] === "assets" && parts[2] && request.method === "GET") {
+      return withCors(await getGenerationAsset(parts[2], context, env), request, env);
     }
 
     if (pathname === "/api/channels" && request.method === "GET") {
@@ -616,25 +674,52 @@ async function handleInternalRoute(
     return jsonResponse({ error: "Unauthorized" }, 401);
   }
 
+  if (parts[2] === "scan-jobs") {
+    if (parts.length === 3 && request.method === "POST") {
+      return leaseScanJob(request, env);
+    }
+
+    if (!parts[3] || request.method !== "POST") {
+      return jsonResponse({ error: "Not found" }, 404);
+    }
+
+    const jobId = decodeURIComponent(parts[3]);
+    const action = parts[4];
+
+    if (action === "heartbeat") return heartbeatScanJob(jobId, request, env);
+    if (action === "progress") return patchScanJob(jobId, request, env);
+    if (action === "complete") return completeScanJob(jobId, request, env);
+    if (action === "fail") return failScanJob(jobId, request, env);
+
+    return jsonResponse({ error: "Not found" }, 404);
+  }
+
+  if (parts[2] === "generation-jobs") {
+    if (parts.length === 3 && request.method === "POST") {
+      return leaseGenerationJob(request, env);
+    }
+
+    if (!parts[3]) {
+      return jsonResponse({ error: "Not found" }, 404);
+    }
+
+    const jobId = decodeURIComponent(parts[3]);
+    const action = parts[4];
+
+    if (request.method === "POST") {
+      if (action === "heartbeat") return heartbeatGenerationJob(jobId, request, env);
+      if (action === "progress") return patchGenerationJob(jobId, request, env);
+      if (action === "complete") return completeGenerationJob(jobId, request, env);
+      if (action === "fail") return failGenerationJob(jobId, request, env);
+      if (action === "assets") return uploadGenerationAsset(jobId, request, env);
+    }
+
+    return jsonResponse({ error: "Not found" }, 404);
+  }
+
   if (parts[2] !== "scan-jobs") {
     return jsonResponse({ error: "Not found" }, 404);
   }
-
-  if (parts.length === 3 && request.method === "POST") {
-    return leaseScanJob(request, env);
-  }
-
-  if (!parts[3] || request.method !== "POST") {
-    return jsonResponse({ error: "Not found" }, 404);
-  }
-
-  const jobId = decodeURIComponent(parts[3]);
-  const action = parts[4];
-
-  if (action === "heartbeat") return heartbeatScanJob(jobId, request, env);
-  if (action === "progress") return patchScanJob(jobId, request, env);
-  if (action === "complete") return completeScanJob(jobId, request, env);
-  if (action === "fail") return failScanJob(jobId, request, env);
 
   return jsonResponse({ error: "Not found" }, 404);
 }
@@ -1044,6 +1129,524 @@ async function failScanJob(jobId: string, request: Request, env: Env): Promise<R
 
   const failed = await fetchInternalScanJob(jobId, env);
   return jsonResponse({ job: { ...toScanJob(failed ?? updated), leaseToken: null } });
+}
+
+async function fetchInternalGenerationJob(
+  jobId: string,
+  env: Env
+): Promise<InternalGenerationJobRow | null> {
+  const row = await env.DB.prepare(
+    `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE id = ? LIMIT 1`
+  )
+    .bind(jobId)
+    .first<InternalGenerationJobRow>();
+
+  return row ?? null;
+}
+
+async function recordGenerationJobEvent(
+  jobId: string,
+  row: Partial<InternalGenerationJobRow>,
+  metadata: Record<string, unknown>,
+  env: Env
+): Promise<void> {
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO generation_job_events (
+        id,
+        generation_job_id,
+        stage,
+        status,
+        progress,
+        message,
+        metadata_json,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `
+  )
+    .bind(
+      crypto.randomUUID(),
+      jobId,
+      row.stage ?? "queued",
+      row.status ?? "queued",
+      row.progress ?? 0,
+      compactMessage(row.message),
+      JSON.stringify(metadata),
+      now
+    )
+    .run();
+}
+
+async function leaseGenerationJob(request: Request, env: Env): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const requestedJobId = String(payload?.jobId ?? "").trim() || null;
+  const now = new Date().toISOString();
+  const leaseableWhere = `
+    (
+      status = 'queued'
+      OR (
+        status = 'running'
+        AND lease_expires_at IS NOT NULL
+        AND lease_expires_at < ?
+      )
+    )
+  `;
+
+  const row = requestedJobId
+    ? await env.DB.prepare(
+        `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE id = ? AND ${leaseableWhere} LIMIT 1`
+      )
+        .bind(requestedJobId, now)
+        .first<InternalGenerationJobRow>()
+    : await env.DB.prepare(
+        `SELECT ${GENERATION_JOB_SELECT} FROM generation_jobs WHERE ${leaseableWhere} ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`
+      )
+        .bind(now)
+        .first<InternalGenerationJobRow>();
+
+  if (!row) {
+    return jsonResponse({ job: null });
+  }
+
+  const leaseToken = crypto.randomUUID();
+  const leaseExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+  const result = await env.DB.prepare(
+    `
+      UPDATE generation_jobs
+      SET
+        status = 'running',
+        stage = CASE WHEN stage = 'queued' THEN 'starting' ELSE stage END,
+        lease_token = ?,
+        lease_expires_at = ?,
+        started_at = COALESCE(started_at, ?),
+        updated_at = ?
+      WHERE id = ?
+        AND (
+          status = 'queued'
+          OR (
+            status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at < ?
+          )
+        )
+    `
+  )
+    .bind(leaseToken, leaseExpiresAt, now, now, row.id, now)
+    .run();
+
+  if (!result.meta.changes) {
+    return jsonResponse({ job: null });
+  }
+
+  const leased = await fetchInternalGenerationJob(row.id, env);
+  if (!leased) return jsonResponse({ job: null });
+
+  await recordGenerationJobEvent(
+    row.id,
+    {
+      message: leased.message,
+      progress: leased.progress,
+      stage: leased.stage,
+      status: leased.status,
+    },
+    { leaseExpiresAt, leaseTokenIssued: true },
+    env
+  );
+
+  return jsonResponse({
+    job: {
+      ...toGenerationJobSummary(leased),
+      leaseToken,
+    },
+  });
+}
+
+async function heartbeatGenerationJob(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const leaseToken = String(payload?.leaseToken ?? "").trim();
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const row = await fetchInternalGenerationJob(jobId, env);
+  if (!row) return jsonResponse({ error: "Generation job not found" }, 404);
+  if (row.lease_token !== leaseToken) {
+    return jsonResponse({ error: "Lease token mismatch" }, 409);
+  }
+
+  const now = new Date().toISOString();
+  const leaseExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+  await env.DB.prepare(
+    `UPDATE generation_jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`
+  )
+    .bind(leaseExpiresAt, now, jobId, leaseToken)
+    .run();
+
+  return jsonResponse({
+    job: {
+      ...toGenerationJobSummary({
+        ...row,
+        lease_expires_at: leaseExpiresAt,
+        updated_at: now,
+      }),
+      leaseToken,
+    },
+  });
+}
+
+async function updateInternalGenerationJob(
+  jobId: string,
+  leaseToken: string,
+  patch: InternalGenerationJobPatch,
+  env: Env
+): Promise<InternalGenerationJobRow | null> {
+  const row = await fetchInternalGenerationJob(jobId, env);
+  if (!row) return null;
+  if (row.lease_token !== leaseToken) {
+    throw new Error("Lease token mismatch");
+  }
+
+  const now = new Date().toISOString();
+  const assignments = ["updated_at = ?"];
+  const binds: unknown[] = [now];
+
+  if (patch.status !== undefined) {
+    assignments.push("status = ?");
+    binds.push(patch.status);
+  }
+
+  if (patch.stage !== undefined) {
+    assignments.push("stage = ?");
+    binds.push(patch.stage);
+  }
+
+  if (patch.progress !== undefined) {
+    assignments.push("progress = ?");
+    binds.push(patch.progress);
+  }
+
+  if (patch.message !== undefined) {
+    assignments.push("message = ?");
+    binds.push(compactMessage(patch.message));
+  }
+
+  if (patch.providerJobId !== undefined) {
+    assignments.push("provider_job_id = ?");
+    binds.push(patch.providerJobId);
+  }
+
+  if (patch.output !== undefined) {
+    assignments.push("output_json = ?");
+    binds.push(JSON.stringify(patch.output));
+  }
+
+  binds.push(jobId, leaseToken);
+
+  await env.DB.prepare(
+    `UPDATE generation_jobs SET ${assignments.join(", ")} WHERE id = ? AND lease_token = ?`
+  )
+    .bind(...binds)
+    .run();
+
+  const updated = await fetchInternalGenerationJob(jobId, env);
+  if (!updated) return null;
+
+  await recordGenerationJobEvent(
+    jobId,
+    {
+      message: updated.message,
+      progress: updated.progress,
+      stage: updated.stage,
+      status: updated.status,
+    },
+    patch,
+    env
+  );
+
+  return updated;
+}
+
+async function patchGenerationJob(jobId: string, request: Request, env: Env): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const leaseToken = String(payload?.leaseToken ?? "").trim();
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  try {
+    const updated = await updateInternalGenerationJob(
+      jobId,
+      leaseToken,
+      {
+        message:
+          payload?.message === undefined || payload?.message === null
+            ? undefined
+            : String(payload.message),
+        output:
+          payload?.output === undefined || payload?.output === null
+            ? undefined
+            : (payload.output as JsonObject),
+        progress:
+          payload?.progress === undefined || payload?.progress === null
+            ? undefined
+            : Number(payload.progress),
+        providerJobId:
+          payload?.providerJobId === undefined || payload?.providerJobId === null
+            ? undefined
+            : String(payload.providerJobId),
+        stage:
+          payload?.stage === undefined || payload?.stage === null
+            ? undefined
+            : String(payload.stage),
+        status:
+          payload?.status === undefined || payload?.status === null
+            ? undefined
+            : String(payload.status),
+      },
+      env
+    );
+
+    if (!updated) return jsonResponse({ error: "Generation job not found" }, 404);
+    return jsonResponse({ job: { ...toGenerationJobSummary(updated), leaseToken } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Lease token mismatch") {
+      return jsonResponse({ error: error.message }, 409);
+    }
+
+    throw error;
+  }
+}
+
+async function completeGenerationJob(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const leaseToken = String(payload?.leaseToken ?? "").trim();
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const updated = await updateInternalGenerationJob(
+    jobId,
+    leaseToken,
+    {
+      message:
+        payload?.message === undefined || payload?.message === null
+          ? "Completed generation job"
+          : String(payload.message),
+      output:
+        payload?.output === undefined || payload?.output === null
+          ? undefined
+          : (payload.output as JsonObject),
+      progress: 1,
+      providerJobId:
+        payload?.providerJobId === undefined || payload?.providerJobId === null
+          ? undefined
+          : String(payload.providerJobId),
+      stage: payload?.stage ? String(payload.stage) : "completed",
+      status: "completed",
+    },
+    env
+  );
+
+  if (!updated) return jsonResponse({ error: "Generation job not found" }, 404);
+
+  const completedAt = new Date().toISOString();
+  await env.DB.prepare(
+    `
+      UPDATE generation_jobs
+      SET lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
+      WHERE id = ?
+    `
+  )
+    .bind(completedAt, completedAt, jobId)
+    .run();
+
+  const completed = await fetchInternalGenerationJob(jobId, env);
+  return jsonResponse({ job: { ...toGenerationJobSummary(completed ?? updated), leaseToken: null } });
+}
+
+async function failGenerationJob(jobId: string, request: Request, env: Env): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const leaseToken = String(payload?.leaseToken ?? "").trim();
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const updated = await updateInternalGenerationJob(
+    jobId,
+    leaseToken,
+    {
+      message:
+        payload?.message === undefined || payload?.message === null
+          ? "Generation job failed"
+          : String(payload.message),
+      output:
+        payload?.output === undefined || payload?.output === null
+          ? undefined
+          : (payload.output as JsonObject),
+      progress:
+        payload?.progress === undefined || payload?.progress === null
+          ? undefined
+          : Number(payload.progress),
+      providerJobId:
+        payload?.providerJobId === undefined || payload?.providerJobId === null
+          ? undefined
+          : String(payload.providerJobId),
+      stage: payload?.stage ? String(payload.stage) : "failed",
+      status: "failed",
+    },
+    env
+  );
+
+  if (!updated) return jsonResponse({ error: "Generation job not found" }, 404);
+
+  const completedAt = new Date().toISOString();
+  await env.DB.prepare(
+    `
+      UPDATE generation_jobs
+      SET lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
+      WHERE id = ?
+    `
+  )
+    .bind(completedAt, completedAt, jobId)
+    .run();
+
+  const failed = await fetchInternalGenerationJob(jobId, env);
+  return jsonResponse({ job: { ...toGenerationJobSummary(failed ?? updated), leaseToken: null } });
+}
+
+function sanitizeAssetFileName(fileName: string): string {
+  return fileName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120) || "asset.bin";
+}
+
+async function uploadGenerationAsset(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const formData = await request.formData();
+  const leaseToken = String(formData.get("leaseToken") ?? "").trim();
+  const assetKind = String(formData.get("assetKind") ?? "").trim();
+  const fileName = sanitizeAssetFileName(String(formData.get("fileName") ?? ""));
+  const mimeType = String(formData.get("mimeType") ?? "").trim() || "application/octet-stream";
+  const variant = String(formData.get("variant") ?? "").trim() || null;
+  const metadataValue = String(formData.get("metadata") ?? "").trim();
+  const projectId = String(formData.get("projectId") ?? "").trim() || null;
+  const file = formData.get("file") as Blob | string | null;
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  if (!assetKind) {
+    return jsonResponse({ error: "assetKind is required" }, 400);
+  }
+
+  if (!file || typeof file === "string" || typeof file.arrayBuffer !== "function") {
+    return jsonResponse({ error: "file is required" }, 400);
+  }
+
+  const job = await fetchInternalGenerationJob(jobId, env);
+  if (!job) return jsonResponse({ error: "Generation job not found" }, 404);
+  if (job.lease_token !== leaseToken) {
+    return jsonResponse({ error: "Lease token mismatch" }, 409);
+  }
+
+  const metadata = metadataValue ? parseJsonObject(metadataValue) : {};
+  const assetId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const byteSize = file.size || null;
+  const finalProjectId = projectId ?? job.project_id;
+  const r2Key = [
+    "generated",
+    job.workspace_id,
+    finalProjectId ?? "unscoped",
+    jobId,
+    `${assetId}-${fileName}`,
+  ].join("/");
+
+  await env.ASSETS.put(r2Key, await file.arrayBuffer(), {
+    httpMetadata: {
+      contentType: mimeType,
+    },
+  });
+
+  await env.DB.prepare(
+    `
+      INSERT INTO generation_assets (
+        id,
+        workspace_id,
+        project_id,
+        generation_job_id,
+        asset_kind,
+        variant,
+        mime_type,
+        file_name,
+        byte_size,
+        r2_key,
+        metadata_json,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+  )
+    .bind(
+      assetId,
+      job.workspace_id,
+      finalProjectId,
+      jobId,
+      assetKind,
+      variant,
+      mimeType,
+      fileName,
+      byteSize,
+      r2Key,
+      JSON.stringify(metadata),
+      now
+    )
+    .run();
+
+  const row = await env.DB.prepare(
+    `SELECT ${GENERATION_ASSET_SELECT} FROM generation_assets WHERE id = ? LIMIT 1`
+  )
+    .bind(assetId)
+    .first<GenerationAssetRow>();
+
+  if (!row) {
+    return jsonResponse({ error: "Failed to persist asset" }, 500);
+  }
+
+  await recordGenerationJobEvent(
+    jobId,
+    {
+      message: `Uploaded ${assetKind} asset`,
+      progress: job.progress,
+      stage: job.stage,
+      status: job.status,
+    },
+    { assetId, assetKind, variant, r2Key },
+    env
+  );
+
+  return jsonResponse({ asset: toGenerationAssetSummary(row) });
 }
 
 function parseTags(rawValue: unknown): string[] {
@@ -1631,13 +2234,33 @@ function toGenerationJobSummary(row: GenerationJobRow): GenerationJobSummary {
     provider: row.provider,
     providerJobId: row.provider_job_id,
     status: row.status,
+    stage: row.stage,
     progress: Number(row.progress ?? 0),
     input: parseJsonObject(row.input_json),
     output: parseJsonObject(row.output_json),
+    message: row.message,
     errorMessage: row.error_message,
     createdByUserId: row.created_by_user_id,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function toGenerationAssetSummary(row: GenerationAssetRow): GenerationAssetSummary {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    generationJobId: row.generation_job_id,
+    assetKind: row.asset_kind,
+    variant: row.variant,
+    mimeType: row.mime_type,
+    fileName: row.file_name,
+    byteSize: row.byte_size === null ? null : Number(row.byte_size),
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+    downloadPath: `/api/assets/${encodeURIComponent(row.id)}`,
   };
 }
 
@@ -1764,6 +2387,25 @@ async function listGenerationJobsForProject(
   return results.map(toGenerationJobSummary);
 }
 
+async function listGenerationAssetsForProject(
+  projectId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationAssetSummary[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_ASSET_SELECT}
+      FROM generation_assets
+      WHERE workspace_id = ? AND project_id = ?
+      ORDER BY created_at DESC
+    `
+  )
+    .bind(workspaceId, projectId)
+    .all<GenerationAssetRow>();
+
+  return results.map(toGenerationAssetSummary);
+}
+
 async function listGenerationJobsForPersonaModel(
   modelId: string,
   workspaceId: string,
@@ -1791,11 +2433,12 @@ async function loadScriptProjectDetail(
   const row = await findScriptProjectRow(projectId, context, env);
   if (!row) return null;
 
-  const [researchItems, outputs, thumbnailBriefs, generationJobs] = await Promise.all([
+  const [researchItems, outputs, thumbnailBriefs, generationJobs, generatedAssets] = await Promise.all([
     listScriptResearchItems(projectId, env),
     listScriptOutputs(projectId, env),
     listThumbnailBriefs(projectId, env),
     listGenerationJobsForProject(projectId, context.workspace.id, env),
+    listGenerationAssetsForProject(projectId, context.workspace.id, env),
   ]);
 
   return {
@@ -1804,6 +2447,7 @@ async function loadScriptProjectDetail(
     outputs,
     thumbnailBriefs,
     generationJobs,
+    generatedAssets,
   };
 }
 
@@ -2195,9 +2839,10 @@ async function generateScriptProjectOutput(
   const analytics = await getChannelAnalytics(project.channel_slug, context, env);
   if (!analytics) return jsonResponse({ error: "Channel not found" }, 404);
 
-  const [researchItems, outputs, topHooks] = await Promise.all([
+  const [researchItems, outputs, thumbnailBriefs, topHooks] = await Promise.all([
     listScriptResearchItems(projectId, env),
     listScriptOutputs(projectId, env),
+    listThumbnailBriefs(projectId, env),
     fetchHooks(analytics.channel.id, env, { limit: 6, sort: "views" }),
   ]);
 
@@ -2223,11 +2868,29 @@ async function generateScriptProjectOutput(
     ...generated.metadata,
     topic: project.topic,
   };
+  const thumbnailReferenceVideos = [...analytics.videos]
+    .sort((left, right) => right.viewCount - left.viewCount)
+    .slice(0, 6)
+    .map((video) => ({
+      thumbnailUrl: `https://i.ytimg.com/vi/${video.youtubeId}/hqdefault.jpg`,
+      title: video.title,
+      viewCount: video.viewCount,
+      youtubeId: video.youtubeId,
+    }));
+  const latestScriptOutput = outputs
+    .filter((output) => output.step === "script")
+    .sort((left, right) => right.version - left.version)[0];
+  const latestDirectorNotes = outputs
+    .filter((output) => output.step === "director_notes")
+    .sort((left, right) => right.version - left.version)[0];
+  const latestThumbnailBrief = thumbnailBriefs[0] ?? null;
 
   let generationJobId: string | null = null;
 
   if (rawStep === "thumbnail_brief") {
     const nextVersion = await getNextThumbnailBriefVersion(projectId, env);
+    const briefId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
     await env.DB.prepare(
       `
         INSERT INTO thumbnail_briefs (id, project_id, version, content, metadata_json, created_at)
@@ -2235,14 +2898,41 @@ async function generateScriptProjectOutput(
       `
     )
       .bind(
-        crypto.randomUUID(),
+        briefId,
         projectId,
         nextVersion,
         generated.content,
         JSON.stringify(metadata),
-        new Date().toISOString()
+        createdAt
       )
       .run();
+
+    const job = await createGenerationJob(
+      {
+        jobType: "thumbnail_images",
+        message: "Queued thumbnail image generation",
+        output: {},
+        progress: 0,
+        projectId,
+        provider: "gemini",
+        providerJobId: null,
+        stage: "queued",
+        status: "queued",
+        input: {
+          briefContent: generated.content,
+          briefId,
+          channelName: analytics.channel.channel_name,
+          channelSlug: analytics.channel.slug,
+          projectTitle: project.title,
+          referenceImages: thumbnailReferenceVideos,
+          topic: project.topic,
+        },
+        personaModelId: null,
+      },
+      context,
+      env
+    );
+    generationJobId = job.id;
   } else {
     const nextVersion = await getNextScriptOutputVersion(projectId, rawStep, env);
     const outputId = crypto.randomUUID();
@@ -2283,10 +2973,19 @@ async function generateScriptProjectOutput(
           projectId,
           provider: "internal",
           providerJobId: null,
+          stage: "queued",
           status: "queued",
+          message: "Queued previsualization render",
           input: {
             briefOutputId: outputId,
+            briefContent: generated.content,
+            channelName: analytics.channel.channel_name,
+            channelSlug: analytics.channel.slug,
+            directorNotesContent: latestDirectorNotes?.content ?? "",
             projectTitle: project.title,
+            referenceImages: thumbnailReferenceVideos,
+            scriptContent: latestScriptOutput?.content ?? "",
+            thumbnailBriefContent: latestThumbnailBrief?.content ?? "",
             topic: project.topic,
           },
           personaModelId: null,
@@ -2599,6 +3298,48 @@ async function getGenerationJob(
   return jsonResponse({ job: toGenerationJobSummary(row) });
 }
 
+async function getGenerationAsset(
+  assetId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const row = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_ASSET_SELECT}
+      FROM generation_assets
+      WHERE id = ? AND workspace_id = ?
+      LIMIT 1
+    `
+  )
+    .bind(assetId, context.workspace.id)
+    .first<GenerationAssetRow>();
+
+  if (!row) return jsonResponse({ error: "Asset not found" }, 404);
+
+  const object = await env.ASSETS.get(row.r2_key);
+  if (!object) return jsonResponse({ error: "Asset blob not found" }, 404);
+
+  const headers = new Headers();
+  headers.set("content-type", row.mime_type);
+  headers.set("cache-control", "private, max-age=60");
+  headers.set(
+    "content-disposition",
+    `${row.mime_type.startsWith("video/") ? "inline" : "inline"}; filename="${row.file_name.replace(/"/g, "")}"`
+  );
+  if (row.byte_size !== null) {
+    headers.set("content-length", String(row.byte_size));
+  }
+
+  return new Response(object.body, {
+    status: 200,
+    headers,
+  });
+}
+
 async function listWorkspaceChannelRows(
   context: RequestContext,
   env: Env
@@ -2645,12 +3386,14 @@ async function createGenerationJob(
   params: {
     input: JsonObject;
     jobType: string;
+    message?: string | null;
     output: JsonObject;
     personaModelId: string | null;
     progress: number;
     projectId: string | null;
     provider: string;
     providerJobId: string | null;
+    stage?: string;
     status: string;
   },
   context: RequestContext,
@@ -2670,14 +3413,18 @@ async function createGenerationJob(
         provider,
         provider_job_id,
         status,
+        stage,
         progress,
         input_json,
         output_json,
+        message,
         error_message,
         created_by_user_id,
+        started_at,
+        completed_at,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
     `
   )
     .bind(
@@ -2689,9 +3436,11 @@ async function createGenerationJob(
       params.provider,
       params.providerJobId,
       params.status,
+      params.stage ?? "queued",
       params.progress,
       JSON.stringify(params.input),
       JSON.stringify(params.output),
+      compactMessage(params.message),
       context.session.user.id,
       now,
       now
@@ -2706,11 +3455,15 @@ async function createGenerationJob(
     provider: params.provider,
     providerJobId: params.providerJobId,
     status: params.status,
+    stage: params.stage ?? "queued",
     progress: params.progress,
     input: params.input,
     output: params.output,
+    message: compactMessage(params.message),
     errorMessage: null,
     createdByUserId: context.session.user.id,
+    startedAt: null,
+    completedAt: null,
     createdAt: now,
     updatedAt: now,
   };

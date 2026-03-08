@@ -7,9 +7,11 @@
     "typecheck": "tsc --noEmit",
     "build:artifacts": "tsx src/ingest/build-channel-artifacts.ts",
     "vectorize:upsert": "tsx src/vectorize/upsert-transcript-chunks.ts",
-    "scan:run": "tsx src/scan/run-scan-jobs.ts"
+    "scan:run": "tsx src/scan/run-scan-jobs.ts",
+    "media:run": "tsx src/generation/run-generation-jobs.ts"
   },
   "dependencies": {
+    "@google/genai": "^1.29.0",
     "dotenv": "^17.2.3",
     "tsx": "^4.20.6"
   },
