@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type {
   ChannelSummary,
   PersonaModelDetail,
@@ -21,10 +21,24 @@ type ChannelCollectionResponse = {
 
 function getStatusTone(status: string) {
   if (status === "ready") return { dot: "bg-success", text: "text-success", label: "Ready" };
-  if (status === "training" || status === "queued" || status === "running") {
+  if (
+    status === "training" ||
+    status === "queued" ||
+    status === "running" ||
+    status === "provisioning"
+  ) {
     return { dot: "bg-[#E3A234]", text: "text-[#E3A234]", label: "Training" };
   }
   return { dot: "bg-placeholder", text: "text-muted-foreground", label: "Untrained" };
+}
+
+function isActivePersonaStatus(status: string | null | undefined) {
+  return (
+    status === "training" ||
+    status === "queued" ||
+    status === "running" ||
+    status === "provisioning"
+  );
 }
 
 function getLatestProgress(model: PersonaModelDetail | null) {
@@ -38,9 +52,8 @@ export default function PersonaModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const channels = useBackendQuery<ChannelCollectionResponse>("/channels");
-  const personaModels = useBackendQuery<PersonaModelListResponse>("/persona-models", {
-    pollMs: 5000,
-  });
+  const personaModels = useBackendQuery<PersonaModelListResponse>("/persona-models");
+  const refetchPersonaModels = personaModels.refetch;
 
   const modelByChannel = useMemo(() => {
     return new Map((personaModels.data?.items ?? []).map((item) => [item.channelSlug ?? "", item]));
@@ -52,6 +65,19 @@ export default function PersonaModelsPage() {
       model: modelByChannel.get(channel.slug) ?? null,
     }));
   }, [channels.data?.items, modelByChannel]);
+
+  const shouldPollPersonaModels =
+    activeJobKey !== null || rows.some(({ model }) => isActivePersonaStatus(model?.status));
+
+  useEffect(() => {
+    if (!shouldPollPersonaModels) return;
+
+    const timer = window.setInterval(() => {
+      refetchPersonaModels();
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [refetchPersonaModels, shouldPollPersonaModels]);
 
   const untrainedChannel = rows.find((row) => !row.model)?.channel ?? null;
 
@@ -146,14 +172,12 @@ function PersonaModelRow({
     model ? `/persona-models/${encodeURIComponent(model.id)}` : null,
     {
       enabled: Boolean(model),
-      pollMs:
-        model?.status === "training" || model?.status === "queued" || model?.status === "running"
-          ? 5000
-          : null,
+      pollMs: isActivePersonaStatus(model?.status) ? 5000 : null,
     }
   );
   const progress = getLatestProgress(detail.data?.personaModel ?? null);
   const status = model?.status ?? "untrained";
+  const isReady = status === "ready";
   const statusTone = getStatusTone(status);
   const baseModel = model?.baseModel
     ? model.baseModel.split("/").at(-1)?.replace("-Instruct", "") ?? model.baseModel
@@ -191,7 +215,7 @@ function PersonaModelRow({
           </span>
         ) : null}
         <Button variant={model ? "outline" : "default"} size="sm" onClick={onTrain} disabled={isPending}>
-          {isPending ? "Starting..." : model ? "Retrain" : "Train"}
+          {isPending ? "Starting..." : model && isReady ? "Retrain" : "Train"}
         </Button>
         <Button asChild variant="outline" size="sm">
           <a href={`#model-${model?.id ?? channel.slug}`}>Details</a>

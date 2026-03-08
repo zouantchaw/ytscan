@@ -2601,12 +2601,20 @@ function toGenerationAssetSummary(row: GenerationAssetRow): GenerationAssetSumma
   };
 }
 
+function normalizePersonaStatus(row: PersonaModelRow): string {
+  if (row.status === "ready" && !row.adapter_path) {
+    return "draft";
+  }
+
+  return row.status;
+}
+
 function toPersonaModelSummary(row: PersonaModelRow): PersonaModelSummary {
   return {
     id: row.id,
     channelSlug: row.channel_slug,
     channelName: row.channel_name,
-    status: row.status,
+    status: normalizePersonaStatus(row),
     provider: row.provider,
     providerJobId: row.provider_job_id,
     baseModel: row.base_model,
@@ -3457,7 +3465,7 @@ async function createPersonaModel(
         created_by_user_id,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, 'ready', 'lambda', NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, 'draft', 'lambda', NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
     `
   )
     .bind(
@@ -3623,11 +3631,6 @@ async function trainPersonaModel(
       const launchResult = await launchLambdaInstance(env, {
         ...launchPlan,
         name: `ytscan-${(personaModel.channel_slug ?? "model").slice(0, 24)}-${personaModel.id.slice(0, 8)}`,
-        tags: [
-          { key: "app", value: "ytscan" },
-          { key: "job_type", value: "persona_train" },
-          { key: "workspace_id", value: context.workspace.id },
-        ],
         userData: buildPersonaTrainingUserData({
           apiBaseUrl,
           baseModel: personaModel.base_model,
@@ -3870,7 +3873,7 @@ async function createGenerationJob(
         completed_at,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
     `
   )
     .bind(

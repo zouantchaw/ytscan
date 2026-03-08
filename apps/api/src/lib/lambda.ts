@@ -191,7 +191,6 @@ export async function launchLambdaInstance(
   env: Env,
   options: LambdaLaunchPlan & {
     name?: string | null;
-    tags?: Array<{ key: string; value: string }>;
     userData?: string | null;
   }
 ): Promise<{ instanceIds: string[]; raw: unknown }> {
@@ -201,7 +200,6 @@ export async function launchLambdaInstance(
     ssh_key_names: options.sshKeyNames,
     ...(options.name?.trim() ? { name: options.name.trim() } : {}),
     ...(options.userData?.trim() ? { user_data: options.userData.trim() } : {}),
-    ...(options.tags?.length ? { tags: options.tags } : {}),
   };
 
   const payload = await lambdaRequest<LambdaLaunchResponse>(env, "/instance-operations/launch", {

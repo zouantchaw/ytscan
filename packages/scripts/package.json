@@ -8,7 +8,8 @@
     "build:artifacts": "tsx src/ingest/build-channel-artifacts.ts",
     "vectorize:upsert": "tsx src/vectorize/upsert-transcript-chunks.ts",
     "scan:run": "tsx src/scan/run-scan-jobs.ts",
-    "media:run": "tsx src/generation/run-generation-jobs.ts"
+    "media:run": "tsx src/generation/run-generation-jobs.ts",
+    "thumbnail:backfill": "tsx src/ops/backfill-thumbnail-analyses.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
