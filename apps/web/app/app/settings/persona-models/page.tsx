@@ -178,6 +178,7 @@ function PersonaModelRow({
   const progress = getLatestProgress(detail.data?.personaModel ?? null);
   const status = model?.status ?? "untrained";
   const isReady = status === "ready";
+  const isActive = isActivePersonaStatus(status);
   const statusTone = getStatusTone(status);
   const baseModel = model?.baseModel
     ? model.baseModel.split("/").at(-1)?.replace("-Instruct", "") ?? model.baseModel
@@ -214,8 +215,13 @@ function PersonaModelRow({
             {progress}%
           </span>
         ) : null}
-        <Button variant={model ? "outline" : "default"} size="sm" onClick={onTrain} disabled={isPending}>
-          {isPending ? "Starting..." : model && isReady ? "Retrain" : "Train"}
+        <Button
+          variant={model ? "outline" : "default"}
+          size="sm"
+          onClick={onTrain}
+          disabled={isPending || isActive}
+        >
+          {isPending ? "Starting..." : isActive ? "Training..." : model && isReady ? "Retrain" : "Train"}
         </Button>
         <Button asChild variant="outline" size="sm">
           <a href={`#model-${model?.id ?? channel.slug}`}>Details</a>
