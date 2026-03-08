@@ -1,0 +1,17 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "infrastructure/railway/ingest-worker/Dockerfile"
+watchPatterns = [
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  "tsconfig.base.json",
+  "apps/api/wrangler.toml",
+  "packages/core/**",
+  "packages/scripts/**",
+  "infrastructure/railway/ingest-worker/**",
+]
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
