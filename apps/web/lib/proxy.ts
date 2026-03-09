@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getApiOrigin } from "@/lib/server-env";
 
 function buildTargetUrl(
@@ -44,18 +44,18 @@ export async function proxyApiRequest(
   const contentType = response.headers.get("content-type") ?? "";
   const responseBody =
     request.method === "HEAD" || response.status === 204 || response.status === 304
-      ? null
+      ? ""
       : contentType.includes("application/json") ||
           contentType.startsWith("text/") ||
           contentType.includes("javascript") ||
           contentType.includes("xml")
         ? await response.text()
-        : new Uint8Array(await response.arrayBuffer());
+        : Buffer.from(await response.arrayBuffer());
   const responseHeaders = new Headers(response.headers);
   responseHeaders.delete("content-length");
   responseHeaders.set("cache-control", "no-store");
 
-  return new Response(responseBody, {
+  return new NextResponse(responseBody, {
     status: response.status,
     headers: responseHeaders,
   });
