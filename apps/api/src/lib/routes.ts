@@ -1976,6 +1976,23 @@ function parseInteger(rawValue: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function buildTextSearchTerms(query: string): string[] {
+  const normalized = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return [];
+
+  const terms = [...new Set(normalized.split(" ").filter((term) => term.length >= 4))].slice(0, 6);
+  return terms.length > 0 ? terms : [normalized.slice(0, 64)];
+}
+
 function buildSearchFilterClause(
   filters: SearchFilters,
   workspaceId: string
@@ -3981,9 +3998,20 @@ async function runTextSearch(
   context: RequestContext,
   env: Env
 ): Promise<SearchResultItem[]> {
-  const queryPattern = `%${query.toLowerCase()}%`;
+  const searchTerms = buildTextSearchTerms(query);
+  if (searchTerms.length === 0) return [];
+
+  const likeClauses = searchTerms.flatMap(() => [
+    "LOWER(tc.text) LIKE ? ESCAPE '\\'",
+    "LOWER(v.title) LIKE ? ESCAPE '\\'",
+    "LOWER(v.description) LIKE ? ESCAPE '\\'",
+  ]);
+  const likeBinds = searchTerms.flatMap((term) => {
+    const pattern = `%${escapeLikePattern(term)}%`;
+    return [pattern, pattern, pattern];
+  });
   const { clauses, binds } = buildSearchFilterClause(filters, context.workspace.id);
-  const whereClauses = ["LOWER(tc.text) LIKE ?", ...clauses];
+  const whereClauses = [`(${likeClauses.join(" OR ")})`, ...clauses];
   const sql = `
     SELECT ${SEARCH_SELECT}
     FROM transcript_chunks tc
@@ -3995,7 +4023,7 @@ async function runTextSearch(
   `;
 
   const { results = [] } = await env.DB.prepare(sql)
-    .bind(queryPattern, ...binds, limit)
+    .bind(...likeBinds, ...binds, limit)
     .all<Record<string, unknown>>();
 
   return results.map((row) => toSearchResultItem(row));
