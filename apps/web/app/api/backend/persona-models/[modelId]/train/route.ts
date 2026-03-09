@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { proxyApiPath } from "@/lib/proxy";
+import { proxyJsonApiPath } from "@/lib/proxy";
 
 type RouteParams = {
   params: Promise<{ modelId: string }>;
@@ -11,7 +11,7 @@ export const revalidate = 0;
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
   const { modelId } = await params;
-  return proxyApiPath(
+  return proxyJsonApiPath(
     request,
     `/api/persona-models/${encodeURIComponent(modelId)}/train`
   );

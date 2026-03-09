@@ -68,3 +68,35 @@ export async function proxyApiPath(request: NextRequest, targetPath: string) {
   target.search = request.nextUrl.search;
   return proxyToTarget(request, target);
 }
+
+export async function proxyJsonApiPath(request: NextRequest, targetPath: string) {
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  headers.set("x-forwarded-host", request.nextUrl.host);
+  headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""));
+
+  const target = new URL(targetPath, getApiOrigin());
+  target.search = request.nextUrl.search;
+
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
+
+  const response = await fetch(target, {
+    method: request.method,
+    headers,
+    body,
+    redirect: "manual",
+    cache: "no-store",
+  });
+
+  const payload = await response.json().catch(() => null);
+
+  return Response.json(payload, {
+    status: response.status,
+    headers: {
+      "cache-control": "no-store",
+    },
+  });
+}
