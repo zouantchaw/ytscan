@@ -41,10 +41,14 @@ export async function proxyApiRequest(
     cache: "no-store",
   });
 
+  const responseBody =
+    request.method === "HEAD" || response.status === 204 || response.status === 304
+      ? null
+      : await response.arrayBuffer();
   const responseHeaders = new Headers(response.headers);
   responseHeaders.delete("content-length");
 
-  return new Response(response.body, {
+  return new Response(responseBody, {
     status: response.status,
     headers: responseHeaders,
   });

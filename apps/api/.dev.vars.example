@@ -2,7 +2,7 @@
 # Copy to apps/api/.dev.vars and keep that file untracked.
 BETTER_AUTH_SECRET=
 BETTER_AUTH_URL=http://127.0.0.1:8787
-ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://ytscan-web.vercel.app
 RESEND_API_KEY=
 RESEND_FROM_EMAIL=onboarding@resend.dev
 RESEND_FROM_NAME=YTScan
