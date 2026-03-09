@@ -19,17 +19,23 @@ export default function ScriptLabTopicPage() {
   const searchParams = useSearchParams();
   const slug = params.slug;
   const seededTopic = searchParams.get("topic")?.trim() ?? "";
+  const seededPersonaModelId = searchParams.get("personaModelId")?.trim() ?? "";
   const [topic, setTopic] = useState(seededTopic);
-  const [usePersonaModel, setUsePersonaModel] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const channel = useBackendQuery<ChannelDashboard>(
     `/channels/${encodeURIComponent(slug)}`
   );
   const personaModels = useBackendQuery<PersonaModelListResponse>("/persona-models");
-  const activePersona = personaModels.data?.items.find(
-    (item) => item.channelSlug === slug && item.status !== "failed"
-  );
+  const availablePersonas =
+    personaModels.data?.items.filter(
+      (item) => item.channelSlug === slug && item.status === "ready"
+    ) ?? [];
+  const seededPersona =
+    availablePersonas.find((item) => item.id === seededPersonaModelId) ?? null;
+  const activePersona = seededPersona ?? availablePersonas[0] ?? null;
+  const [usePersonaModel, setUsePersonaModel] = useState(Boolean(seededPersonaModelId));
+  const personaEnabled = Boolean(activePersona) && usePersonaModel;
 
   async function createProject(runResearch: boolean) {
     if (!topic.trim()) {
@@ -44,6 +50,7 @@ export default function ScriptLabTopicPage() {
           method: "POST",
           body: JSON.stringify({
             channelSlug: slug,
+            personaModelId: personaEnabled ? activePersona?.id ?? null : null,
             status: "draft",
             title: topic.trim(),
             topic: topic.trim(),
@@ -130,18 +137,19 @@ export default function ScriptLabTopicPage() {
                 <p className="text-sm text-muted-foreground">
                   {activePersona
                     ? `Write in ${channel.data?.channelName ?? "this creator"}'s voice using ${activePersona.baseModel}`
-                    : "Write in the creator's voice using the best available retrieval context."}
+                    : "No ready persona model is attached yet. Script Lab will fall back to channel retrieval context."}
                 </p>
               </div>
               <button
                 type="button"
-                aria-pressed={usePersonaModel}
+                aria-pressed={personaEnabled}
                 onClick={() => setUsePersonaModel((current) => !current)}
-                className="inline-flex h-8 w-12 items-center rounded-full bg-primary/20 p-1"
+                disabled={!activePersona}
+                className="inline-flex h-8 w-12 items-center rounded-full bg-primary/20 p-1 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <span
                   className={`size-6 rounded-full bg-white shadow-sm transition-transform ${
-                    usePersonaModel ? "translate-x-4 bg-primary" : "translate-x-0"
+                    personaEnabled ? "translate-x-4 bg-primary" : "translate-x-0"
                   }`}
                 />
               </button>

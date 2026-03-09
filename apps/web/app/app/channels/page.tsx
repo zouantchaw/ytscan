@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import type { ChannelDashboard, ChannelSummary } from "@ytscan/core";
-import { AppTopNav } from "@/components/app/app-top-nav";
 import {
   AppPanel,
   ChannelAvatar,
   EmptyState,
   PageLoading,
 } from "@/components/app/app-ui";
+import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import {
   formatCompactNumber,
@@ -88,37 +88,39 @@ export default function ChannelSelectorPage() {
   const channels = useBackendQuery<ChannelCollectionResponse>("/channels");
 
   return (
-    <div className="min-h-screen bg-background">
-      <AppTopNav />
-      <main className="app-page py-10">
-        <section className="space-y-8">
+    <main className="app-page pb-10 pt-4 lg:pt-0">
+      <section className="max-w-[1104px] space-y-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <h1 className="font-display text-[48px] font-semibold tracking-[-0.05em] text-foreground">
+            <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
               Your Channels
             </h1>
             <p className="text-[15px] leading-7 text-muted-foreground">
               Select a channel to view its dashboard, or scan a new one.
             </p>
           </div>
+          <Button asChild>
+            <Link href="/app/scans/new">+ Scan New Channel</Link>
+          </Button>
+        </div>
 
-          {channels.isLoading ? (
-            <PageLoading />
-          ) : channels.data?.items.length ? (
-            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-              {channels.data.items.map((channel) => (
-                <ChannelSelectorCard key={channel.slug} channel={channel} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              title="No channels yet"
-              description="Start by scanning a YouTube channel. Once the ingest job completes, it will appear here."
-              actionLabel="+ Scan New Channel"
-              actionHref="/app/scans/new"
-            />
-          )}
-        </section>
-      </main>
-    </div>
+        {channels.isLoading ? (
+          <PageLoading />
+        ) : channels.data?.items.length ? (
+          <div className="grid gap-6 md:grid-cols-2">
+            {channels.data.items.map((channel) => (
+              <ChannelSelectorCard key={channel.slug} channel={channel} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No channels yet"
+            description="Start by scanning a YouTube channel. Once the ingest job completes, it will appear here."
+            actionLabel="+ Scan New Channel"
+            actionHref="/app/scans/new"
+          />
+        )}
+      </section>
+    </main>
   );
 }

@@ -334,6 +334,7 @@ export type ScriptProjectSummary = {
   status: string;
   channelSlug: string | null;
   channelName: string | null;
+  personaModelId: string | null;
   createdByUserId: string;
   createdAt: string;
   updatedAt: string;

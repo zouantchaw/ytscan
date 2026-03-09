@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { AppLogo } from "@/components/brand/app-logo";
 
+const SESSION_MARKER_KEY = "ytscan:had-session";
+
 export function SessionGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -12,8 +14,24 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (session.isPending) return;
-    if (session.data?.user) return;
-    router.replace(`/sign-in?next=${encodeURIComponent(pathname || "/app")}`);
+    if (typeof window !== "undefined") {
+      if (session.data?.user) {
+        window.sessionStorage.setItem(SESSION_MARKER_KEY, "1");
+        return;
+      }
+
+      const hadSession = window.sessionStorage.getItem(SESSION_MARKER_KEY) === "1";
+      router.replace(
+        hadSession
+          ? `/auth/session-expired?next=${encodeURIComponent(pathname || "/app")}`
+          : `/sign-in?next=${encodeURIComponent(pathname || "/app")}`
+      );
+      return;
+    }
+
+    if (!session.data?.user) {
+      router.replace(`/sign-in?next=${encodeURIComponent(pathname || "/app")}`);
+    }
   }, [pathname, router, session.data, session.isPending]);
 
   if (session.isPending || !session.data?.user) {

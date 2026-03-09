@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { authClient } from "@/lib/auth-client";
 import { AuthBrandPanel } from "@/components/auth/auth-brand-panel";
@@ -8,15 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function ForgotPasswordPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    setSuccess(null);
 
     startTransition(async () => {
       const callbackURL =
@@ -26,6 +26,10 @@ export default function ForgotPasswordPage() {
       const result = await authClient.signIn.magicLink({
         email,
         callbackURL,
+        errorCallbackURL:
+          typeof window === "undefined"
+            ? "/auth/magic-link-status"
+            : new URL("/auth/magic-link-status", window.location.origin).toString(),
       });
 
       if (result.error) {
@@ -33,7 +37,12 @@ export default function ForgotPasswordPage() {
         return;
       }
 
-      setSuccess("Magic link sent. Check your inbox to get back into your account.");
+      router.push(
+        `/auth/magic-link-sent?${new URLSearchParams({
+          email,
+          mode: "sign-in",
+        }).toString()}`
+      );
     });
   }
 
@@ -71,12 +80,6 @@ export default function ForgotPasswordPage() {
             <Button type="submit" className="h-11 w-full rounded-[8px] text-[14px] font-semibold" disabled={isPending}>
               {isPending ? "Sending..." : "Send Reset Link"}
             </Button>
-
-            {success ? (
-              <div className="rounded-[10px] border border-[rgb(74_155_110_/_0.28)] bg-[rgb(74_155_110_/_0.08)] px-4 py-3 text-sm leading-6 text-success">
-                {success}
-              </div>
-            ) : null}
 
             {error ? (
               <div className="rounded-[10px] border border-[rgb(201_53_41_/_0.22)] bg-[rgb(201_53_41_/_0.08)] px-4 py-3 text-sm leading-6 text-destructive">

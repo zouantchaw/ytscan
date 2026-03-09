@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ScriptLabViewStep =
@@ -24,6 +25,7 @@ type WorkflowSidebarProps = {
   activeStep: ScriptLabViewStep;
   channelSlug: string;
   projectId?: string;
+  completedSteps?: ScriptLabViewStep[];
 };
 
 function getStepHref(
@@ -44,7 +46,10 @@ export function ScriptLabWorkflowSidebar({
   activeStep,
   channelSlug,
   projectId,
+  completedSteps = [],
 }: WorkflowSidebarProps) {
+  const completed = new Set(completedSteps);
+
   return (
     <aside className="hidden w-[280px] shrink-0 border-r border-separator px-6 py-6 lg:flex lg:flex-col">
       <p className="mb-3 text-[13px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -54,17 +59,19 @@ export function ScriptLabWorkflowSidebar({
         {workflowSteps.map((step, index) => {
           const href = getStepHref(channelSlug, step.id, projectId);
           const isActive = step.id === activeStep;
+          const isCompleted = completed.has(step.id);
+
           const content = (
             <>
               <span
                 className={cn(
                   "inline-flex size-[22px] items-center justify-center rounded-full text-[11px] font-semibold",
-                  isActive
-                    ? "bg-primary text-white"
-                    : "bg-secondary text-muted-foreground"
+                  isActive && "bg-primary text-white",
+                  isCompleted && !isActive && "bg-success text-white",
+                  !isActive && !isCompleted && "bg-secondary text-muted-foreground"
                 )}
               >
-                {index + 1}
+                {isCompleted && !isActive ? <Check className="size-3.5" /> : index + 1}
               </span>
               <span>{step.label}</span>
             </>
@@ -75,8 +82,10 @@ export function ScriptLabWorkflowSidebar({
               <div
                 key={step.id}
                 className={cn(
-                  "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium text-muted-foreground",
-                  isActive && "bg-foreground text-background"
+                  "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium transition-colors",
+                  isActive && "bg-foreground text-background",
+                  isCompleted && !isActive && "text-foreground",
+                  !isActive && !isCompleted && "text-muted-foreground"
                 )}
               >
                 {content}
@@ -89,8 +98,10 @@ export function ScriptLabWorkflowSidebar({
               key={step.id}
               href={href}
               className={cn(
-                "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium text-muted-foreground transition-colors hover:text-foreground",
-                isActive && "bg-foreground text-background hover:text-background"
+                "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium transition-colors",
+                isActive && "bg-foreground text-background hover:text-background",
+                isCompleted && !isActive && "text-foreground hover:bg-secondary",
+                !isActive && !isCompleted && "text-muted-foreground hover:text-foreground"
               )}
             >
               {content}

@@ -1,235 +1,317 @@
 "use client";
 
 import Link from "next/link";
+import { Check, CircleAlert, Clock3, LoaderCircle, Sparkles, XCircle } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useMemo, useTransition } from "react";
 import type { ChannelDashboard, ScanJob } from "@ytscan/core";
-import { AppLogo } from "@/components/brand/app-logo";
-import { AppPanel, VideoThumbnail } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, VideoThumbnail } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
-
-function ScanHeader() {
-  return (
-    <header className="border-b border-separator bg-background">
-      <div className="app-page flex h-[69px] items-center justify-between">
-        <AppLogo size="sm" />
-        <div className="flex items-center gap-3">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/app/channels">Cancel Scan</Link>
-          </Button>
-          <div className="size-9 rounded-full bg-secondary" />
-        </div>
-      </div>
-    </header>
-  );
-}
+import { formatRelativeDate } from "@/lib/formatters";
 
 type ScanJobResponse = {
   job: ScanJob;
 };
 
+function getScanVisual(job: ScanJob) {
+  if (job.status === "completed") {
+    return {
+      icon: Check,
+      badge: "bg-success text-white",
+      headline: "Scan Complete",
+      description: "All available videos were ingested and the channel is ready to explore.",
+    };
+  }
+
+  if (job.status === "failed") {
+    return {
+      icon: CircleAlert,
+      badge: "bg-destructive/10 text-destructive",
+      headline: "Scan Failed",
+      description: job.message ?? "We hit an upstream blocker before the channel finished ingesting.",
+    };
+  }
+
+  if (job.status === "canceled" || job.status === "cancelled") {
+    return {
+      icon: XCircle,
+      badge: "bg-secondary text-muted-foreground",
+      headline: "Scan Canceled",
+      description: job.message ?? "This scan was canceled before it completed.",
+    };
+  }
+
+  if (job.stage === "queued") {
+    return {
+      icon: Clock3,
+      badge: "bg-secondary text-muted-foreground",
+      headline: `Scanning ${job.requestedChannelSlug ?? "channel"}`,
+      description: "Your scan is queued and will begin shortly.",
+    };
+  }
+
+  if (job.stage === "vectorizing") {
+    return {
+      icon: Sparkles,
+      badge: "bg-accent text-primary",
+      headline: `Scanning ${job.requestedChannelSlug ?? "channel"}`,
+      description: "Creating searchable transcript embeddings and ranking hooks.",
+    };
+  }
+
+  if (job.stage === "processing") {
+    return {
+      icon: LoaderCircle,
+      badge: "bg-accent text-primary",
+      headline: `Scanning ${job.requestedChannelSlug ?? "channel"}`,
+      description: "Cleaning transcripts, scoring videos, and extracting key signals.",
+    };
+  }
+
+  return {
+    icon: LoaderCircle,
+    badge: "bg-accent text-primary",
+    headline: `Scanning ${job.requestedChannelSlug ?? "channel"}`,
+    description: "Downloading metadata, transcripts, and thumbnails for this channel.",
+  };
+}
+
+function ScanPreviewCards({
+  topVideos,
+}: {
+  topVideos: ChannelDashboard["topVideos"] | undefined;
+}) {
+  return (
+    <section className="grid w-full max-w-[800px] gap-4">
+      <p className="text-sm font-medium text-muted-foreground">Recently processed</p>
+      <div className="grid gap-4 md:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => {
+          const video = topVideos?.[index];
+
+          return (
+            <AppPanel key={index} className="overflow-hidden">
+              {video ? (
+                <>
+                  <VideoThumbnail
+                    youtubeId={video.youtubeId}
+                    title={video.title}
+                    className="rounded-none border-0"
+                  />
+                  <div className="px-4 py-3">
+                    <p className="line-clamp-2 text-sm font-medium text-foreground">{video.title}</p>
+                  </div>
+                </>
+              ) : (
+                <div className="aspect-[1.78/1] bg-secondary" />
+              )}
+            </AppPanel>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function ScanJobPage() {
   const params = useParams<{ jobId: string }>();
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const jobResponse = useBackendQuery<ScanJobResponse>(
-    `/scan/${encodeURIComponent(params.jobId)}`,
-    { pollMs: 2500 }
-  );
+  const jobResponse = useBackendQuery<ScanJobResponse>(`/scan/${encodeURIComponent(params.jobId)}`, {
+    pollMs: 2500,
+  });
   const job = jobResponse.data?.job;
   const channel = useBackendQuery<ChannelDashboard>(
-    job?.requestedChannelSlug && job.status === "completed"
-      ? `/channels/${encodeURIComponent(job.requestedChannelSlug)}`
-      : null,
+    job?.requestedChannelSlug ? `/channels/${encodeURIComponent(job.requestedChannelSlug)}` : null,
     {
-      enabled: Boolean(job?.requestedChannelSlug && job?.status === "completed"),
+      enabled: Boolean(job?.requestedChannelSlug),
+      pollMs: job?.status === "completed" ? null : 5000,
     }
   );
+
+  const progressPercent = Math.max(0, Math.min(100, Math.round((job?.progress ?? 0) * 100)));
+  const scanVisual = job ? getScanVisual(job) : null;
+  const VisualIcon = scanVisual?.icon ?? LoaderCircle;
+  const isTerminal = job?.status === "completed" || job?.status === "failed" || job?.status === "canceled" || job?.status === "cancelled";
+  const activeChannelSlug = channel.data?.slug ?? job?.requestedChannelSlug ?? null;
+
+  const scanSummary = useMemo(() => {
+    if (!job) return null;
+
+    if (job.status === "completed") {
+      return [
+        {
+          label: "Videos",
+          value: String(channel.data?.totalVideos ?? job.totalVideos ?? 0),
+        },
+        {
+          label: "Transcripts",
+          value: String(channel.data?.totalVideos ?? job.totalVideos ?? 0),
+        },
+        {
+          label: "Thumbnails",
+          value: String(channel.data?.totalVideos ?? job.totalVideos ?? 0),
+        },
+      ];
+    }
+
+    return [
+      {
+        label: "Stage",
+        value: job.stage,
+      },
+      {
+        label: "Status",
+        value: job.status,
+      },
+      {
+        label: "Updated",
+        value: formatRelativeDate(job.updatedAt),
+      },
+    ];
+  }, [channel.data, job]);
 
   async function retryScan() {
     if (!job) return;
     startTransition(async () => {
-      const response = await fetchBackend<{ job: { jobId: string } }>("/scan", {
-        method: "POST",
-        body: JSON.stringify({ channelUrl: job.channelUrl }),
-      });
-      router.replace(`/app/scans/${response.job.jobId}`);
+      try {
+        const response = await fetchBackend<{ job: { jobId: string } }>("/scan", {
+          method: "POST",
+          body: JSON.stringify({ channelUrl: job.channelUrl }),
+        });
+        router.replace(`/app/scans/${response.job.jobId}`);
+      } catch {
+        // noop; the page already reflects terminal job state
+      }
     });
   }
 
   if (!job) {
     return (
-      <div className="min-h-screen bg-background">
-        <ScanHeader />
-        <main className="app-page flex min-h-[calc(100vh-69px)] items-center justify-center py-12">
-          <AppPanel className="h-[220px] w-full max-w-[560px]" />
-        </main>
-      </div>
-    );
-  }
-
-  const progressPercent = Math.max(0, Math.min(100, Math.round(job.progress * 100)));
-
-  if (job.status === "failed") {
-    return (
-      <div className="min-h-screen bg-background">
-        <ScanHeader />
-        <main className="app-page flex min-h-[calc(100vh-69px)] flex-col items-center justify-center gap-6 py-12 text-center">
-          <div className="flex size-[72px] items-center justify-center rounded-full bg-accent text-[32px] font-semibold text-primary">
-            !
-          </div>
-          <div className="max-w-[480px] space-y-2">
-            <h1 className="font-display text-[40px] font-semibold tracking-[-0.05em] text-foreground">
-              Scan Failed
-            </h1>
-            <p className="text-[15px] leading-7 text-muted-foreground">
-              We couldn&apos;t complete the scan for this channel. This usually means the URL was invalid or the ingest worker hit an upstream blocker.
-            </p>
-          </div>
-          <AppPanel className="grid w-full max-w-[400px] gap-3 px-5 py-5 text-left">
-            <p className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-              <span>Channel</span>
-              <span className="font-medium text-foreground">{job.requestedChannelSlug ?? job.channelUrl}</span>
-            </p>
-            <p className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-              <span>Error code</span>
-              <span className="font-medium text-foreground">{job.stage.toUpperCase()}</span>
-            </p>
-            <p className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-              <span>Attempted</span>
-              <span className="font-medium text-foreground">{job.updatedAt}</span>
-            </p>
-          </AppPanel>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={retryScan} disabled={isPending}>
-              {isPending ? "Retrying..." : "Try Again"}
-            </Button>
-            <Button asChild variant="outline">
-              <Link href="/app/scans/new">Try Different URL</Link>
-            </Button>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  if (job.status === "completed") {
-    return (
-      <div className="min-h-screen bg-background">
-        <ScanHeader />
-        <main className="app-page flex min-h-[calc(100vh-69px)] flex-col items-center justify-center gap-8 py-12 text-center">
-          <div className="flex size-20 items-center justify-center rounded-full bg-success text-[34px] font-semibold text-white">
-            ✓
-          </div>
-          <div className="max-w-[540px] space-y-2">
-            <h1 className="font-display text-[42px] font-semibold tracking-[-0.05em] text-foreground">
-              Scan Complete!
-            </h1>
-            <p className="text-[15px] leading-7 text-muted-foreground">
-              We&apos;ve finished analyzing {channel.data?.channelName ?? job.requestedChannelSlug ?? "this channel"}. Here&apos;s a snapshot of what&apos;s now ready in the workspace.
-            </p>
-          </div>
-          <div className="grid w-full max-w-[720px] gap-5 md:grid-cols-4">
-            <div className="space-y-2">
-              <p className="font-display text-[38px] font-semibold tracking-[-0.04em] text-foreground">
-                {channel.data?.totalVideos ?? job.totalVideos ?? 0}
-              </p>
-              <p className="text-sm text-muted-foreground">Videos scanned</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-display text-[38px] font-semibold tracking-[-0.04em] text-foreground">
-                {channel.data?.totalVideos ?? job.totalVideos ?? 0}
-              </p>
-              <p className="text-sm text-muted-foreground">Transcripts</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-display text-[38px] font-semibold tracking-[-0.04em] text-foreground">
-                {channel.data?.totalVideos ?? job.totalVideos ?? 0}
-              </p>
-              <p className="text-sm text-muted-foreground">Thumbnails</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-display text-[38px] font-semibold tracking-[-0.04em] text-foreground">
-                {channel.data?.topicClusters.length ?? 0}
-              </p>
-              <p className="text-sm text-muted-foreground">Topic clusters</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button asChild>
-              <Link href={channel.data ? `/app/channels/${channel.data.slug}` : "/app/channels"}>
-                Go to Dashboard
-              </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href="/app/scans/new">Scan Another Channel</Link>
-            </Button>
-          </div>
-        </main>
-      </div>
+      <main className="app-page flex min-h-[calc(100vh-140px)] items-center justify-center pb-10 pt-4 lg:pt-0">
+        <AppPanel className="h-[320px] w-full max-w-[640px]" />
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <ScanHeader />
-      <main className="app-page flex min-h-[calc(100vh-69px)] flex-col items-center gap-10 py-12">
-        <section className="flex max-w-[560px] flex-col items-center gap-4 text-center">
-          <div className="flex size-14 items-center justify-center rounded-[16px] bg-accent text-primary">
-            <span className="text-[22px] font-semibold">{progressPercent}%</span>
+    <main className="app-page pb-10 pt-4 lg:pt-0">
+      <div className="max-w-[1104px] space-y-8">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-2">
+            <p className="text-[13px] uppercase tracking-[0.08em] text-muted-foreground">
+              Scan lifecycle
+            </p>
+            <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
+              {scanVisual?.headline}
+            </h1>
+            <p className="max-w-[720px] text-[15px] leading-7 text-muted-foreground">
+              {scanVisual?.description}
+            </p>
           </div>
-          <h1 className="font-display text-[40px] font-semibold tracking-[-0.05em] text-foreground">
-            Scanning {job.requestedChannelSlug ?? "channel"}
-          </h1>
-          <p className="text-[15px] leading-7 text-muted-foreground">
-            Ingesting metadata, transcripts, and thumbnails for this channel.
-          </p>
-        </section>
+          {job.status === "completed" && activeChannelSlug ? (
+            <Button asChild size="lg">
+              <Link href={`/app/channels/${activeChannelSlug}`}>Open Dashboard</Link>
+            </Button>
+          ) : null}
+        </div>
 
-        <section className="grid w-full max-w-[560px] gap-3">
-          <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-            <span>
-              {job.processedVideos ?? 0} of {job.totalVideos ?? "?"} videos processed
-            </span>
-            <span>{progressPercent}%</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-secondary">
-            <div className="h-full rounded-full bg-primary" style={{ width: `${progressPercent}%` }} />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-            <span>Stage: {job.stage}</span>
-            <span>Status: {job.status}</span>
-            <span>{job.message ?? "Processing..."}</span>
-          </div>
-        </section>
-
-        <section className="grid w-full max-w-[800px] gap-4">
-          <p className="text-sm font-medium text-muted-foreground">Recently processed</p>
-          <div className="grid gap-3 md:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <AppPanel key={index} className="overflow-hidden">
-                {channel.data?.topVideos[index] ? (
-                  <>
-                    <VideoThumbnail
-                      youtubeId={channel.data.topVideos[index].youtubeId}
-                      title={channel.data.topVideos[index].title}
-                      className="rounded-none border-0"
-                    />
-                    <div className="px-4 py-3">
-                      <p className="line-clamp-2 text-sm font-medium text-foreground">
-                        {channel.data.topVideos[index].title}
-                      </p>
-                    </div>
-                  </>
+        <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="space-y-8">
+            <AppPanel className="flex min-h-[420px] flex-col items-center justify-center gap-6 px-8 py-10 text-center">
+              <div className={`flex size-[72px] items-center justify-center rounded-full ${scanVisual?.badge}`}>
+                {job.status === "completed" ? (
+                  <VisualIcon className="size-8" />
                 ) : (
-                  <div className="h-[178px] bg-secondary" />
+                  <span className="text-[28px] font-semibold">{progressPercent}%</span>
                 )}
-              </AppPanel>
-            ))}
+              </div>
+
+              {!isTerminal ? (
+                <div className="grid w-full max-w-[560px] gap-3">
+                  <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+                    <span>
+                      {job.processedVideos ?? 0} of {job.totalVideos ?? "?"} videos processed
+                    </span>
+                    <span>{progressPercent}%</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width] duration-500"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                    <span>Stage: {job.stage}</span>
+                    <span>Status: {job.status}</span>
+                    <span>{job.message ?? "Processing..."}</span>
+                  </div>
+                </div>
+              ) : null}
+
+              {job.status === "failed" || job.status === "canceled" || job.status === "cancelled" ? (
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Button onClick={retryScan} disabled={isPending}>
+                    {isPending ? "Retrying..." : "Try Again"}
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link href="/app/scans/new">Try Different URL</Link>
+                  </Button>
+                </div>
+              ) : null}
+
+              {job.status === "completed" && activeChannelSlug ? (
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Button asChild>
+                    <Link href={`/app/channels/${activeChannelSlug}`}>Go to Dashboard</Link>
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link href="/app/scans/new">Scan Another Channel</Link>
+                  </Button>
+                </div>
+              ) : null}
+            </AppPanel>
+
+            <ScanPreviewCards topVideos={channel.data?.topVideos} />
           </div>
-        </section>
-      </main>
-    </div>
+
+          <div className="space-y-4">
+            <AppPanel className="grid gap-3 px-5 py-5">
+              <div className="flex items-center gap-3">
+                <ChannelAvatar
+                  channelName={channel.data?.channelName ?? job.requestedChannelSlug ?? "Channel"}
+                  channelSlug={activeChannelSlug}
+                />
+                <div className="min-w-0">
+                  <p className="truncate text-[16px] font-semibold text-foreground">
+                    {channel.data?.channelName ?? job.requestedChannelSlug ?? "Channel"}
+                  </p>
+                  <p className="truncate text-[13px] text-muted-foreground">{job.channelUrl}</p>
+                </div>
+              </div>
+              {scanSummary?.map((item) => (
+                <p
+                  key={item.label}
+                  className="flex items-center justify-between gap-4 text-sm text-muted-foreground"
+                >
+                  <span>{item.label}</span>
+                  <span className="font-medium capitalize text-foreground">{item.value}</span>
+                </p>
+              ))}
+            </AppPanel>
+
+            {!isTerminal ? (
+              <AppPanel className="space-y-3 px-5 py-5">
+                <p className="text-[14px] font-semibold text-foreground">What happens next</p>
+                <p className="text-[14px] leading-6 text-muted-foreground">
+                  The ingest worker will finish downloads, process transcripts, build vector
+                  embeddings, and promote the channel into your workspace once complete.
+                </p>
+              </AppPanel>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </main>
   );
 }

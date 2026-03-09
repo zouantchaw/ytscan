@@ -85,6 +85,13 @@ function formatReference(item: ResearchItemLike): string {
 }
 
 function formatVoiceNotes(topHooks: HookSummary[], researchItems: ResearchItemLike[]): string[] {
+  const personaNotes = takeTopResearch(researchItems, "persona_style", 3)
+    .map((item) => {
+      const prompt = cleanText(String(item.metadata.prompt ?? item.title ?? "Persona sample"));
+      const excerpt = cleanText(item.excerpt);
+      return excerpt ? `${prompt}: ${excerpt.slice(0, 160)}` : null;
+    })
+    .filter((value): value is string => Boolean(value));
   const hookNotes = topHooks
     .slice(0, 3)
     .map((hook) => `${hook.hookType}: ${cleanText(hook.text).slice(0, 140)}`);
@@ -92,7 +99,7 @@ function formatVoiceNotes(topHooks: HookSummary[], researchItems: ResearchItemLi
     .map((item) => cleanText(item.excerpt))
     .filter(Boolean)
     .map((value) => value.slice(0, 160));
-  return [...hookNotes, ...quoteNotes].slice(0, 5);
+  return [...personaNotes, ...hookNotes, ...quoteNotes].slice(0, 6);
 }
 
 function findExistingOutput(existingOutputs: OutputLike[], step: string): OutputLike | null {
@@ -119,6 +126,9 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
   const proofPoints = takeTopResearch(context.researchItems, "quote", 3)
     .map((item) => `- ${formatReference(item)}`)
     .join("\n");
+  const personaAnchors = takeTopResearch(context.researchItems, "persona_style", 2)
+    .map((item) => `- ${cleanText(item.excerpt).slice(0, 180)}`)
+    .join("\n");
 
   return {
     content: [
@@ -129,6 +139,9 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
         hook.text,
         "",
       ]),
+      ...(personaAnchors
+        ? ["## Persona anchors", personaAnchors, ""]
+        : []),
       "## Proof points to support the opening",
       proofPoints || "- No direct transcript hits yet. Use the channel's strongest existing examples first.",
     ].join("\n"),
@@ -190,6 +203,9 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
   const voiceNotes = formatVoiceNotes(context.topHooks, context.researchItems);
   const proofItems = takeTopResearch(context.researchItems, "quote", 3);
   const competitorItems = takeTopResearch(context.researchItems, "gap", 2);
+  const personaSamples = takeTopResearch(context.researchItems, "persona_style", 2)
+    .map((item) => cleanText(item.excerpt))
+    .filter(Boolean);
 
   return {
     content: [
@@ -200,7 +216,9 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
       ...(voiceNotes.length === 0 ? ["- Concrete, direct, and framed around asymmetric upside."] : []),
       "",
       "## Draft",
-      hooksOutput ? takeSentences(hooksOutput.content, 1)[0] : `If you want to understand ${context.topic}, stop starting with the obvious angle.`,
+      hooksOutput
+        ? takeSentences(hooksOutput.content, 1)[0]
+        : personaSamples[0] || `If you want to understand ${context.topic}, stop starting with the obvious angle.`,
       "",
       `Most people approach ${context.topic} like a content category. ${context.channelName} should frame it like an edge. The point is not that ${context.topic} exists. The point is why the opportunity still feels mispriced, who is compounding inside it, and what the audience can copy before it gets crowded.`,
       "",

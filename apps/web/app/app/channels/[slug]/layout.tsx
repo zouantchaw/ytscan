@@ -1,8 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import type { ChannelDashboard } from "@ytscan/core";
 import { useParams, usePathname } from "next/navigation";
-import { AppTopNav } from "@/components/app/app-top-nav";
 import { useBackendQuery } from "@/lib/backend-client";
 import { prettifyChannelSlug } from "@/lib/channel-ui";
 
@@ -23,19 +23,29 @@ export default function ChannelLayout({ children }: ChannelLayoutProps) {
   );
   const channelName = channel.data?.channelName ?? prettifyChannelSlug(slug);
 
+  if (!needsChannelLabel) {
+    return children;
+  }
+
   return (
-    <div className="min-h-screen bg-background">
-      {isHookRoute ? (
-        <AppTopNav breadcrumbs={[channelName, "Dashboard", "Hook Library"]} />
-      ) : isVideoRoute ? (
-        <AppTopNav
-          breadcrumbs={[channelName, "Video Detail"]}
-          rightHref={`/app/channels/${slug}`}
-          rightLabel="Back to Dashboard"
-        />
-      ) : (
-        <AppTopNav channelSlug={slug} showTabs />
-      )}
+    <div className="space-y-4">
+      <div className="app-page">
+        <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+          <Link href={`/app/channels/${slug}`} className="font-medium text-foreground hover:text-primary">
+            {channelName}
+          </Link>
+          <span>/</span>
+          {isHookRoute ? (
+            <>
+              <span>Dashboard</span>
+              <span>/</span>
+              <span className="font-medium text-foreground">Hook Library</span>
+            </>
+          ) : (
+            <span className="font-medium text-foreground">Video Detail</span>
+          )}
+        </div>
+      </div>
       {children}
     </div>
   );

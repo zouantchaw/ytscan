@@ -1,3 +1,4 @@
+import { AuthenticatedAppShell } from "@/components/app/authenticated-app-shell";
 import { SessionGuard } from "@/components/app/session-guard";
 
 export default function AuthenticatedAppLayout({
@@ -5,5 +6,9 @@ export default function AuthenticatedAppLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return <SessionGuard>{children}</SessionGuard>;
+  return (
+    <SessionGuard>
+      <AuthenticatedAppShell>{children}</AuthenticatedAppShell>
+    </SessionGuard>
+  );
 }

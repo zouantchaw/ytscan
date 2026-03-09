@@ -119,6 +119,7 @@ type ScriptProjectRow = {
   id: string;
   workspace_id: string;
   channel_id: number | null;
+  persona_model_id: string | null;
   title: string;
   topic: string;
   status: string;
@@ -360,6 +361,7 @@ const SCRIPT_PROJECT_SELECT = `
   sp.id,
   sp.workspace_id,
   sp.channel_id,
+  sp.persona_model_id,
   sp.title,
   sp.topic,
   sp.status,
@@ -1287,6 +1289,8 @@ async function syncPersonaModelFromGenerationJob(
       targetStatus === "failed" ? compactMessage(job.error_message ?? job.message) : null,
     lastTrainingJobId: job.id,
     lastTrainingOutput: output,
+    styleSamples:
+      targetStatus === "ready" && Array.isArray(output.styleSamples) ? output.styleSamples : null,
     latestAdapterAssetId: adapterAsset?.id ?? null,
     latestMetricsAssetId: metricsAsset?.id ?? null,
   };
@@ -2529,6 +2533,7 @@ function toScriptProjectSummary(row: ScriptProjectRow): ScriptProjectSummary {
     status: row.status,
     channelSlug: row.channel_slug,
     channelName: row.channel_name,
+    personaModelId: row.persona_model_id,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -2643,6 +2648,86 @@ function toPersonaModelSummary(row: PersonaModelRow): PersonaModelSummary {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+type PersonaStyleSample = {
+  prompt: string;
+  title: string;
+  content: string;
+  source: string;
+};
+
+function coerceString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readPersonaStyleSamples(row: PersonaModelRow | null): PersonaStyleSample[] {
+  if (!row) return [];
+
+  const metadata = parseJsonObject(row.metadata_json);
+  const directSamples = Array.isArray(metadata.styleSamples)
+    ? metadata.styleSamples
+    : [];
+  const nestedOutput =
+    metadata.lastTrainingOutput &&
+    typeof metadata.lastTrainingOutput === "object" &&
+    !Array.isArray(metadata.lastTrainingOutput)
+      ? (metadata.lastTrainingOutput as JsonObject)
+      : {};
+  const nestedSamples = Array.isArray(nestedOutput.styleSamples)
+    ? nestedOutput.styleSamples
+    : [];
+
+  const rawSamples = [...directSamples, ...nestedSamples];
+  const samples: PersonaStyleSample[] = [];
+
+  for (const rawSample of rawSamples) {
+    if (!rawSample || typeof rawSample !== "object" || Array.isArray(rawSample)) {
+      continue;
+    }
+    const sample = rawSample as Record<string, unknown>;
+    const content = coerceString(sample.content);
+    if (!content) continue;
+    samples.push({
+      prompt: coerceString(sample.prompt) ?? "Persona sample",
+      title: coerceString(sample.title) ?? "Style sample",
+      content,
+      source: coerceString(sample.source) ?? "trained-persona",
+    });
+  }
+
+  return samples.slice(0, 4);
+}
+
+function buildFallbackPersonaSamples(topHooks: HookSummary[]): PersonaStyleSample[] {
+  return topHooks.slice(0, 3).map((hook, index) => ({
+    prompt: `Reference hook ${index + 1}`,
+    title: hook.videoTitle,
+    content: buildSnippet(hook.text, 180),
+    source: "channel-corpus",
+  }));
+}
+
+async function validatePersonaModelSelection(
+  personaModelId: string | null,
+  channelSlug: string | null,
+  context: RequestContext,
+  env: Env
+): Promise<PersonaModelRow | null> {
+  if (!personaModelId) return null;
+
+  const personaModel = await findPersonaModelRow(personaModelId, context, env);
+  if (!personaModel) {
+    throw new Error("Persona model not found");
+  }
+  if (normalizePersonaStatus(personaModel) !== "ready") {
+    throw new Error("Persona model is not ready yet");
+  }
+  if (channelSlug && personaModel.channel_slug && personaModel.channel_slug !== channelSlug) {
+    throw new Error("Persona model must belong to the selected channel");
+  }
+
+  return personaModel;
 }
 
 async function findScriptProjectRow(
@@ -2845,6 +2930,8 @@ async function createScriptProject(
   const requestedStatus = String(payload?.status ?? "draft").trim() || "draft";
   const channelSlug =
     String(payload?.channelSlug ?? payload?.channel ?? env.DEFAULT_CHANNEL_SLUG ?? "").trim() || null;
+  const requestedPersonaModelId =
+    String(payload?.personaModelId ?? "").trim() || null;
 
   if (!topic) {
     return jsonResponse({ error: "topic is required" }, 400);
@@ -2853,6 +2940,21 @@ async function createScriptProject(
   const channel = channelSlug ? await findChannel(channelSlug, context, env) : null;
   if (channelSlug && !channel) {
     return jsonResponse({ error: "Channel not found" }, 404);
+  }
+
+  let personaModel: PersonaModelRow | null = null;
+  try {
+    personaModel = await validatePersonaModelSelection(
+      requestedPersonaModelId,
+      channelSlug,
+      context,
+      env
+    );
+  } catch (error) {
+    return jsonResponse(
+      { error: error instanceof Error ? error.message : "Invalid persona model" },
+      400
+    );
   }
 
   const projectId = crypto.randomUUID();
@@ -2864,6 +2966,7 @@ async function createScriptProject(
         id,
         workspace_id,
         channel_id,
+        persona_model_id,
         title,
         topic,
         status,
@@ -2877,6 +2980,7 @@ async function createScriptProject(
       projectId,
       context.workspace.id,
       channel?.id ?? null,
+      personaModel?.id ?? null,
       title,
       topic,
       requestedStatus,
@@ -2947,6 +3051,33 @@ async function updateScriptProject(
     }
   }
 
+  if (payload.personaModelId !== undefined) {
+    const personaModelId = String(payload.personaModelId ?? "").trim() || null;
+    const selectedChannelSlug =
+      payload.channelSlug !== undefined || payload.channel !== undefined
+        ? String(payload.channelSlug ?? payload.channel ?? "").trim() || null
+        : existing.channel_slug;
+    if (!personaModelId) {
+      assignments.push("persona_model_id = NULL");
+    } else {
+      try {
+        const personaModel = await validatePersonaModelSelection(
+          personaModelId,
+          selectedChannelSlug,
+          context,
+          env
+        );
+        assignments.push("persona_model_id = ?");
+        binds.push(personaModel?.id ?? null);
+      } catch (error) {
+        return jsonResponse(
+          { error: error instanceof Error ? error.message : "Invalid persona model" },
+          400
+        );
+      }
+    }
+  }
+
   binds.push(projectId, context.workspace.id);
 
   await env.DB.prepare(
@@ -2985,6 +3116,16 @@ async function rebuildScriptResearch(
     fetchHooks(analytics.channel.id, env, { limit: 5, sort: "views" }),
     listWorkspaceChannelRows(context, env),
   ]);
+  const personaModel = project.persona_model_id
+    ? await findPersonaModelRow(project.persona_model_id, context, env)
+    : null;
+  const extractedPersonaSamples = readPersonaStyleSamples(personaModel);
+  const personaSamples =
+    extractedPersonaSamples.length > 0
+      ? extractedPersonaSamples
+      : personaModel
+        ? buildFallbackPersonaSamples(topHooks)
+        : [];
 
   const quoteItems = (semanticMatches && semanticMatches.length > 0 ? semanticMatches : textMatches).slice(0, 6);
   const gapItems: Array<{
@@ -3083,6 +3224,21 @@ async function rebuildScriptResearch(
       sourceVectorId: null,
       sourceYoutubeId: hook.youtubeId,
       title: hook.videoTitle,
+    })),
+    ...personaSamples.map((sample, index) => ({
+      excerpt: sample.content,
+      itemType: "persona_style",
+      metadata: {
+        baseModel: personaModel?.base_model ?? null,
+        personaModelId: personaModel?.id ?? null,
+        prompt: sample.prompt,
+        source: sample.source,
+      },
+      score: 10_000 - index,
+      sourceChannelSlug: project.channel_slug,
+      sourceVectorId: null,
+      sourceYoutubeId: null,
+      title: sample.title,
     })),
     ...analytics.topicClusters.slice(0, 4).map((topic) => ({
       excerpt: `Average views ${topic.averageViews.toLocaleString()} across ${topic.videoCount} videos.`,
@@ -3207,6 +3363,9 @@ async function generateScriptProjectOutput(
     listThumbnailBriefs(projectId, env),
     fetchHooks(analytics.channel.id, env, { limit: 6, sort: "views" }),
   ]);
+  const selectedPersonaModel = project.persona_model_id
+    ? await findPersonaModelRow(project.persona_model_id, context, env)
+    : null;
 
   const ensuredResearch =
     researchItems.length > 0 ? researchItems : await rebuildScriptResearch(project, context, env);
@@ -3225,9 +3384,15 @@ async function generateScriptProjectOutput(
   const generated = manualContent
     ? { content: manualContent, metadata: { source: "manual" } }
     : generateScriptLabStep(rawStep, generatorContext);
-  const modelKey = manualContent ? "manual" : "retrieval-template-v1";
+  const modelKey = manualContent
+    ? "manual"
+    : selectedPersonaModel
+      ? "persona-template-v1"
+      : "retrieval-template-v1";
   const metadata = {
     ...generated.metadata,
+    personaModelId: selectedPersonaModel?.id ?? null,
+    personaModelBase: selectedPersonaModel?.base_model ?? null,
     topic: project.topic,
   };
   const thumbnailReferenceVideos = [...analytics.videos]
@@ -3285,11 +3450,12 @@ async function generateScriptProjectOutput(
           briefId,
           channelName: analytics.channel.channel_name,
           channelSlug: analytics.channel.slug,
+          personaModelId: selectedPersonaModel?.id ?? null,
           projectTitle: project.title,
           referenceImages: thumbnailReferenceVideos,
           topic: project.topic,
         },
-        personaModelId: null,
+        personaModelId: selectedPersonaModel?.id ?? null,
       },
       context,
       env
@@ -3344,13 +3510,14 @@ async function generateScriptProjectOutput(
             channelName: analytics.channel.channel_name,
             channelSlug: analytics.channel.slug,
             directorNotesContent: latestDirectorNotes?.content ?? "",
+            personaModelId: selectedPersonaModel?.id ?? null,
             projectTitle: project.title,
             referenceImages: thumbnailReferenceVideos,
             scriptContent: latestScriptOutput?.content ?? "",
             thumbnailBriefContent: latestThumbnailBrief?.content ?? "",
             topic: project.topic,
           },
-          personaModelId: null,
+          personaModelId: selectedPersonaModel?.id ?? null,
         },
         context,
         env

@@ -180,6 +180,62 @@ def zip_directory(source_dir: Path, destination_path: Path) -> None:
                 archive.write(path, path.relative_to(source_dir))
 
 
+def build_style_samples(
+    model: AutoModelForCausalLM, tokenizer: AutoTokenizer
+) -> list[dict[str, str]]:
+    prompts = [
+        (
+            "Contrarian hook",
+            "Write a contrarian YouTube opening hook about hidden businesses nobody is talking about in 2026.",
+        ),
+        (
+            "Operator explanation",
+            "Explain why boring businesses create outsized leverage for first-time buyers in a concise YouTube paragraph.",
+        ),
+        (
+            "Close",
+            "Write a direct closing takeaway that pushes the viewer to take action this week.",
+        ),
+    ]
+    samples: list[dict[str, str]] = []
+    device = next(model.parameters()).device
+    model.eval()
+
+    for title, prompt in prompts:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are writing in the creator's YouTube voice. Stay concrete, direct, and persuasive.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+        rendered = format_messages(tokenizer, messages)
+        encoded = tokenizer(rendered, return_tensors="pt").to(device)
+        with torch.no_grad():
+            generated = model.generate(
+                **encoded,
+                max_new_tokens=120,
+                do_sample=True,
+                temperature=0.85,
+                top_p=0.92,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        generated_tokens = generated[0][encoded["input_ids"].shape[-1] :]
+        text = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+        if text:
+            samples.append(
+                {
+                    "title": title,
+                    "prompt": prompt,
+                    "content": text,
+                    "source": "trained-persona",
+                }
+            )
+
+    return samples
+
+
 def main() -> None:
     args = parse_args()
     api_base_url = args.api_base_url.rstrip("/")
@@ -329,6 +385,8 @@ def main() -> None:
                 parameter.numel() for parameter in model.parameters() if parameter.requires_grad
             ),
         }
+        style_samples = build_style_samples(model, tokenizer)
+        metrics["styleSamples"] = style_samples
         metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
         adapter_asset = upload_asset(
@@ -362,6 +420,7 @@ def main() -> None:
               "adapterAssetId": adapter_asset["id"],
               "metrics": metrics,
               "metricsAssetId": metrics_asset["id"],
+              "styleSamples": style_samples,
           },
         )
     except Exception as exc:

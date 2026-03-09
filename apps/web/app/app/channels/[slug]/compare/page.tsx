@@ -77,7 +77,7 @@ export default function ChannelComparePage() {
 
   if (!otherChannels.length) {
     return (
-      <main className="app-page py-8">
+      <main className="app-page pb-10 pt-4 lg:pt-0">
         <EmptyState
           title="No competitor channels yet"
           description="Scan a second channel to unlock side-by-side comparison and gap analysis."
@@ -90,7 +90,7 @@ export default function ChannelComparePage() {
 
   if (!comparison.data || !leftDashboard.data || !rightDashboard.data) {
     return (
-      <main className="app-page py-8">
+      <main className="app-page pb-10 pt-4 lg:pt-0">
         <div className="grid gap-6">
           <AppPanel className="h-[90px]" />
           <div className="grid gap-6 xl:grid-cols-[1fr_auto_1fr]">
@@ -111,12 +111,13 @@ export default function ChannelComparePage() {
     right.performanceBreakdown.find((item) => item.tier === "viral")?.percentage ?? 0;
   const leftTopTopic = left.topicClusters[0]?.topic ?? "—";
   const rightTopTopic = right.topicClusters[0]?.topic ?? "—";
+  const hasOverlap = comparison.data.topicOverlap.length > 0;
 
   return (
-    <main className="app-page py-8">
-      <div className="grid gap-6">
+    <main className="app-page pb-10 pt-4 lg:pt-0">
+      <div className="max-w-[1104px] grid gap-6">
         <section className="flex items-center justify-between gap-4">
-          <h1 className="font-display text-[48px] font-semibold tracking-[-0.05em] text-foreground">
+          <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
             Competitor Analysis
           </h1>
           <div className="flex items-center gap-3">
@@ -278,45 +279,60 @@ export default function ChannelComparePage() {
             </div>
           </AppPanel>
 
-          <AppPanel className="flex flex-col gap-4 px-6 py-6">
-            <div className="flex items-center justify-between gap-4">
-              <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
-                Topic Overlap
-              </h2>
-              <p className="text-sm text-muted-foreground">Topics both channels cover</p>
-            </div>
-            <div className="grid gap-3">
-              {comparison.data.topicOverlap.slice(0, 3).map((topic) => (
-                <div key={topic.topic} className="rounded-[8px] bg-background px-4 py-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-[15px] font-medium text-foreground">{topic.topic}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {left.channelName.split(" ")[0]}: {formatCompactNumber(topic.leftAverageViews)} avg ·{" "}
-                        {right.channelName.split(" ")[0]}: {formatCompactNumber(topic.rightAverageViews)} avg
-                      </p>
-                    </div>
-                    <span
-                      className={cn(
-                        "text-sm font-medium",
-                        topic.winnerSlug === slug
-                          ? "text-success"
-                          : topic.winnerSlug
-                            ? "text-primary"
-                            : "text-muted-foreground"
-                      )}
+          {hasOverlap ? (
+            <AppPanel className="flex flex-col gap-4 px-6 py-6">
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+                  Topic Overlap
+                </h2>
+                <p className="text-sm text-muted-foreground">Topics both channels cover</p>
+              </div>
+              <div className="grid gap-3">
+                {comparison.data.topicOverlap.slice(0, 3).map((topic) => (
+                  <div key={topic.topic} className="rounded-[8px] bg-background px-4 py-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-[15px] font-medium text-foreground">{topic.topic}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {left.channelName.split(" ")[0]}: {formatCompactNumber(topic.leftAverageViews)} avg ·{" "}
+                          {right.channelName.split(" ")[0]}: {formatCompactNumber(topic.rightAverageViews)} avg
+                        </p>
+                      </div>
+                      <span
+                        className={cn(
+                          "text-sm font-medium",
+                          topic.winnerSlug === slug
+                            ? "text-success"
+                            : topic.winnerSlug
+                              ? "text-primary"
+                              : "text-muted-foreground"
+                        )}
                       >
-                      {topic.winnerSlug === slug
-                        ? `${left.channelName.split(" ")[0]} wins`
-                        : topic.winnerSlug
-                          ? `${right.channelName.split(" ")[0]} wins`
-                          : "Even"}
-                    </span>
+                        {topic.winnerSlug === slug
+                          ? `${left.channelName.split(" ")[0]} wins`
+                          : topic.winnerSlug
+                            ? `${right.channelName.split(" ")[0]} wins`
+                            : "Even"}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </AppPanel>
+                ))}
+              </div>
+            </AppPanel>
+          ) : (
+            <AppPanel className="flex min-h-[352px] flex-col items-center justify-center gap-4 px-6 py-10 text-center">
+              <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+                No Overlapping Content
+              </h2>
+              <p className="max-w-[420px] text-[15px] leading-7 text-muted-foreground">
+                {left.channelName} and {right.channelName} do not share enough topic overlap for a
+                direct content comparison yet.
+              </p>
+              <Button asChild variant="outline">
+                <Link href={`/app/channels/${slug}/compare/picker`}>Choose different channels</Link>
+              </Button>
+            </AppPanel>
+          )}
         </section>
       </div>
     </main>

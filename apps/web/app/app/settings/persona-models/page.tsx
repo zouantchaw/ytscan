@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import type {
   ChannelSummary,
@@ -8,7 +9,6 @@ import type {
   PersonaModelResponse,
   PersonaModelSummary,
 } from "@ytscan/core";
-import { AppTopNav } from "@/components/app/app-top-nav";
 import { AppPanel, ChannelAvatar } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
@@ -113,50 +113,47 @@ export default function PersonaModelsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <AppTopNav breadcrumbs={["Settings", "Persona Models"]} />
-      <main className="app-page py-9">
-        <div className="grid gap-8">
-          <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-1">
-              <h1 className="font-display text-[30px] font-bold tracking-[-0.04em] text-foreground">
-                Persona Models
-              </h1>
-              <p className="text-[14px] leading-6 text-muted-foreground">
-                LoRA fine-tuned models that capture each channel&apos;s writing voice.
-              </p>
-            </div>
-            <Button
-              onClick={() => untrainedChannel && runTrainFlow(untrainedChannel.slug)}
-              disabled={!untrainedChannel || isPending}
-            >
-              + Train New Model
-            </Button>
-          </section>
-
-          <section className="grid gap-4">
-            {rows.map(({ channel, model }) => (
-              <PersonaModelRow
-                key={channel.slug}
-                channel={channel}
-                model={model}
-                isPending={isPending && activeJobKey === channel.slug}
-                onTrain={() => runTrainFlow(channel.slug, model)}
-              />
-            ))}
-          </section>
-
-          <AppPanel className="bg-secondary px-5 py-5">
-            <p className="text-[13px] leading-6 text-muted-foreground">
-              Training uses Lambda Labs compute. Estimated cost is roughly $5–15 per model, with
-              around 1–2 hours of training time depending on corpus size and base model.
+    <main className="app-page pb-10 pt-4 lg:pt-0">
+      <div className="max-w-[1104px] space-y-8">
+        <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
+              Persona Models
+            </h1>
+            <p className="max-w-[640px] text-[15px] leading-7 text-muted-foreground">
+              LoRA fine-tuned models that capture each channel&apos;s writing voice.
             </p>
-          </AppPanel>
+          </div>
+          <Button
+            onClick={() => untrainedChannel && runTrainFlow(untrainedChannel.slug)}
+            disabled={!untrainedChannel || isPending}
+          >
+            + Train New Model
+          </Button>
+        </section>
 
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        </div>
-      </main>
-    </div>
+        <section className="grid gap-4">
+          {rows.map(({ channel, model }) => (
+            <PersonaModelRow
+              key={channel.slug}
+              channel={channel}
+              model={model}
+              isPending={isPending && activeJobKey === channel.slug}
+              onTrain={() => runTrainFlow(channel.slug, model)}
+            />
+          ))}
+        </section>
+
+        <AppPanel className="bg-secondary px-5 py-5">
+          <p className="text-[13px] leading-6 text-muted-foreground">
+            Training uses Lambda Labs compute. Estimated cost is roughly $5–15 per model, with
+            around 1–2 hours of training time depending on corpus size and base model.
+          </p>
+        </AppPanel>
+
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+    </main>
   );
 }
 
@@ -234,7 +231,9 @@ function PersonaModelRow({
                 : "Train"}
         </Button>
         <Button asChild variant="outline" size="sm">
-          <a href={`#model-${model?.id ?? channel.slug}`}>Details</a>
+          <Link href={model ? `/app/settings/persona-models/${model.id}` : "/app/settings/persona-models"}>
+            Details
+          </Link>
         </Button>
       </div>
     </AppPanel>

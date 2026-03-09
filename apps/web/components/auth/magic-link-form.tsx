@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Github, Mail, Send } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
@@ -24,11 +25,11 @@ export function MagicLinkForm({
   defaultChannelUrl = "",
   mode,
 }: MagicLinkFormProps) {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [channelUrl, setChannelUrl] = useState(defaultChannelUrl);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const submitLabel =
     mode === "sign-up" ? "Create Account" : "Email me a sign-in link";
@@ -36,7 +37,6 @@ export function MagicLinkForm({
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    setSuccess(null);
 
     startTransition(async () => {
       if (mode === "sign-up" && typeof window !== "undefined") {
@@ -44,17 +44,20 @@ export function MagicLinkForm({
       }
 
       const callbackURL = toAbsolutePath("/app");
+      const errorCallbackURL = toAbsolutePath("/auth/magic-link-status");
       const payload =
         mode === "sign-up"
           ? {
               email,
               name,
               callbackURL,
+              errorCallbackURL,
               newUserCallbackURL: callbackURL,
             }
           : {
               email,
               callbackURL,
+              errorCallbackURL,
             };
 
       const result = await authClient.signIn.magicLink(payload);
@@ -64,11 +67,14 @@ export function MagicLinkForm({
         return;
       }
 
-      setSuccess(
-        mode === "sign-up"
-          ? `Magic link sent. We’ll use ${channelUrl || "your first channel"} once you’re in.`
-          : "Magic link sent. Check your inbox to finish signing in."
-      );
+      const params = new URLSearchParams({
+        email,
+        mode,
+      });
+      if (mode === "sign-up" && channelUrl.trim()) {
+        params.set("channel", channelUrl.trim());
+      }
+      router.push(`/auth/magic-link-sent?${params.toString()}`);
     });
   }
 
@@ -165,12 +171,6 @@ export function MagicLinkForm({
           <Send className="size-4" />
         </Button>
 
-        {success ? (
-          <div className="rounded-[10px] border border-[rgb(74_155_110_/_0.28)] bg-[rgb(74_155_110_/_0.08)] px-4 py-3 text-sm leading-6 text-success">
-            {success}
-          </div>
-        ) : null}
-
         {error ? (
           <div className="rounded-[10px] border border-[rgb(201_53_41_/_0.22)] bg-[rgb(201_53_41_/_0.08)] px-4 py-3 text-sm leading-6 text-destructive">
             {error}
@@ -194,7 +194,7 @@ export function MagicLinkForm({
       {mode === "sign-in" ? (
         <div className="text-[13px] text-[#6b6b66]">
           <Link href="/forgot-password" className="font-medium text-primary hover:text-primary/80">
-            Forgot password?
+            Need a new magic link?
           </Link>
         </div>
       ) : null}

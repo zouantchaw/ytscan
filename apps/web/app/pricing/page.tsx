@@ -81,23 +81,23 @@ export default function PricingPage() {
         </nav>
       </header>
 
-      <section className="mx-auto flex w-full max-w-[1440px] flex-col items-center gap-3 px-6 pb-12 pt-12 text-center md:px-10 xl:px-12">
-        <h1 className="font-display text-[36px] font-bold leading-[48px] tracking-[-0.03em] text-foreground md:text-[40px]">
-          Simple, transparent pricing
+      <section className="mx-auto flex w-full max-w-[1040px] flex-col items-center gap-3 px-6 pb-12 pt-14 text-center md:px-10">
+        <h1 className="font-display text-[36px] font-bold leading-[48px] tracking-[-0.03em] text-foreground md:text-[44px]">
+          Choose the plan that matches your workflow
         </h1>
-        <p className="text-[16px] leading-5 text-[#6b6b66]">
-          Start free. Upgrade when you need more channels and deeper insights.
+        <p className="max-w-[680px] text-[16px] leading-7 text-[#6b6b66]">
+          Start with a single creator, then unlock multi-channel research, persona training, and full Script Lab workflows as your team grows.
         </p>
       </section>
 
-      <section className="mx-auto grid w-full max-w-[1440px] gap-6 px-6 pb-12 md:px-10 xl:grid-cols-3 xl:px-12">
+      <section className="mx-auto grid w-full max-w-[1100px] gap-6 px-6 pb-14 md:px-10 xl:grid-cols-3">
         {plans.map((plan) => (
           <article
             key={plan.name}
             className={
               plan.tone === "dark"
-                ? "relative flex h-full flex-col gap-6 rounded-[12px] bg-[#1a1a18] px-9 py-9 text-white"
-                : "flex h-full flex-col gap-6 rounded-[12px] border border-border bg-card px-9 py-9"
+                ? "relative flex h-full flex-col gap-6 rounded-[18px] bg-[#1a1a18] px-8 py-8 text-white"
+                : "flex h-full flex-col gap-6 rounded-[18px] border border-border bg-card px-8 py-8"
             }
           >
             {plan.badge ? (
