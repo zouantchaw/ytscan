@@ -6,6 +6,8 @@ type RouteParams = {
 };
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const revalidate = 0;
 
 async function handleRequest(request: NextRequest, { params }: RouteParams) {
   const { path } = await params;
