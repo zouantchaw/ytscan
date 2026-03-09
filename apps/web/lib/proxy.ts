@@ -17,17 +17,11 @@ function buildTargetUrl(
   return target;
 }
 
-export async function proxyApiRequest(
-  request: NextRequest,
-  path: string[],
-  namespace: "auth" | "backend"
-) {
+async function proxyToTarget(request: NextRequest, target: URL) {
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.set("x-forwarded-host", request.nextUrl.host);
   headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""));
-
-  const target = buildTargetUrl(request, path, namespace);
   const body =
     request.method === "GET" || request.method === "HEAD"
       ? undefined
@@ -59,4 +53,18 @@ export async function proxyApiRequest(
     status: response.status,
     headers: responseHeaders,
   });
+}
+
+export async function proxyApiRequest(
+  request: NextRequest,
+  path: string[],
+  namespace: "auth" | "backend"
+) {
+  return proxyToTarget(request, buildTargetUrl(request, path, namespace));
+}
+
+export async function proxyApiPath(request: NextRequest, targetPath: string) {
+  const target = new URL(targetPath, getApiOrigin());
+  target.search = request.nextUrl.search;
+  return proxyToTarget(request, target);
 }
