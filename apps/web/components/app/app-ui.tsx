@@ -1,7 +1,7 @@
-import type { HTMLAttributes } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { ExternalLink } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { type MetricDelta } from "@ytscan/core";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -177,6 +177,33 @@ export function EmptyState({
   );
 }
 
+export function ErrorState({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <AppPanel className="flex min-h-[280px] flex-col items-center justify-center gap-4 px-6 py-10 text-center">
+      <div className="flex size-16 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+        <AlertTriangle className="size-7" />
+      </div>
+      <div className="space-y-2">
+        <h2 className="font-display text-[30px] font-semibold tracking-[-0.04em] text-foreground">
+          {title}
+        </h2>
+        <p className="max-w-[520px] text-[15px] leading-7 text-muted-foreground">
+          {description}
+        </p>
+      </div>
+      {action}
+    </AppPanel>
+  );
+}
+
 export function PageLoading({
   cards = 3,
   className,
@@ -239,7 +266,7 @@ export function VideoMetaLink({
   children,
 }: {
   href: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <a

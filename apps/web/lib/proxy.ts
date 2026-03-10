@@ -91,10 +91,74 @@ export async function proxyJsonApiPath(request: NextRequest, targetPath: string)
     cache: "no-store",
   });
 
-  const payload = await response.json().catch(() => null);
+  const responseText =
+    request.method === "HEAD" || response.status === 204 || response.status === 304
+      ? ""
+      : await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+  const isJsonResponse = contentType.includes("application/json");
+  const payload = responseText
+    ? (() => {
+        try {
+          return JSON.parse(responseText) as unknown;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
 
-  return Response.json(payload, {
-    status: response.status,
+  if (response.ok && responseText === "") {
+    return Response.json(
+      {
+        error: `Upstream JSON API returned an empty response for ${targetPath}.`,
+      },
+      {
+        status: 502,
+        headers: {
+          "cache-control": "no-store",
+        },
+      }
+    );
+  }
+
+  if (responseText && !payload && isJsonResponse) {
+    return Response.json(
+      {
+        error: `Upstream JSON API returned invalid JSON for ${targetPath}.`,
+      },
+      {
+        status: 502,
+        headers: {
+          "cache-control": "no-store",
+        },
+      }
+    );
+  }
+
+  if (response.ok && responseText && !isJsonResponse) {
+    return Response.json(
+      {
+        error: `Upstream JSON API returned a non-JSON response for ${targetPath}.`,
+      },
+      {
+        status: 502,
+        headers: {
+          "cache-control": "no-store",
+        },
+      }
+    );
+  }
+
+  const normalizedPayload =
+    payload ??
+    (responseText
+      ? {
+          error: responseText,
+        }
+      : null);
+
+  return Response.json(normalizedPayload, {
+    status: response.ok ? response.status : response.status || 502,
     headers: {
       "cache-control": "no-store",
     },

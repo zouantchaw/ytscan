@@ -48,6 +48,10 @@ export async function fetchBackend<T>(
     throw new BackendError(message, response.status, payload);
   }
 
+  if (payload === null) {
+    throw new BackendError("Backend returned an empty response", 502, null);
+  }
+
   return payload as T;
 }
 

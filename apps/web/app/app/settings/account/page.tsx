@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 import type { ChannelSummary, MeResponse } from "@ytscan/core";
-import { ChannelAvatar } from "@/components/app/app-ui";
+import { ChannelAvatar, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
@@ -19,6 +19,27 @@ export default function SettingsAccountPage() {
   const [isPending, startTransition] = useTransition();
   const me = useBackendQuery<MeResponse>("/me");
   const channels = useBackendQuery<ChannelCollectionResponse>("/channels");
+
+  if (me.error || channels.error) {
+    return (
+      <section className="max-w-[640px]">
+        <ErrorState
+          title="Account settings are unavailable"
+          description="We couldn't load your account details. Retry the page and try again."
+          action={
+            <div className="flex items-center gap-3">
+              <Button variant="outline" onClick={() => me.refetch()}>
+                Retry account
+              </Button>
+              <Button variant="outline" onClick={() => channels.refetch()}>
+                Retry channels
+              </Button>
+            </div>
+          }
+        />
+      </section>
+    );
+  }
 
   function handleSignOut() {
     startTransition(async () => {

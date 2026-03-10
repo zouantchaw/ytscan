@@ -12,7 +12,7 @@ import type {
   SearchResultItem,
   VideoSummary,
 } from "@ytscan/core";
-import { AppPanel, EmptyState, VideoThumbnail } from "@/components/app/app-ui";
+import { AppPanel, EmptyState, ErrorState, VideoThumbnail } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import {
@@ -105,6 +105,29 @@ export default function VideoDetailPage() {
   const topicTags = selectedVideo ? buildTopicTags(selectedVideo, dashboard.data) : [];
   const score = selectedVideo ? buildPerformanceScore(selectedVideo) : 0;
   const thumbnailAnalysis = selectedVideo?.thumbnailAnalysis ?? null;
+
+  if (videos.error || dashboard.error || hooks.error) {
+    return (
+      <main className="app-page py-9">
+        <ErrorState
+          title="Video detail unavailable"
+          description="The app could not load this video detail view. Retry to refresh the channel, transcript, and thumbnail context."
+          action={
+            <Button
+              onClick={() => {
+                videos.refetch();
+                dashboard.refetch();
+                hooks.refetch();
+                transcriptSearch.refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      </main>
+    );
+  }
 
   if (!selectedVideo && !videos.isLoading) {
     return (

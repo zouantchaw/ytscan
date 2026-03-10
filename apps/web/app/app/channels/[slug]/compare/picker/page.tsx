@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { ChannelSummary } from "@ytscan/core";
-import { AppPanel, ChannelAvatar, EmptyState } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, EmptyState, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,18 @@ export default function ComparePickerPage() {
   const [selectedSlug, setSelectedSlug] = useState<string | null | undefined>(undefined);
   const resolvedSelectedSlug =
     selectedSlug === undefined ? competitorChannels[0]?.slug ?? null : selectedSlug;
+
+  if (channels.error) {
+    return (
+      <main className="app-page pb-10 pt-4 lg:pt-0">
+        <ErrorState
+          title="Compare is unavailable right now"
+          description="We couldn't load the channels in this workspace. Retry the page and try again."
+          action={<Button onClick={() => channels.refetch()}>Retry</Button>}
+        />
+      </main>
+    );
+  }
 
   if (!competitorChannels.length) {
     return (

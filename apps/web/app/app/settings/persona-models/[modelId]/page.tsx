@@ -5,7 +5,7 @@ import { CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useState, useTransition } from "react";
 import type { ChannelDashboard, PersonaModelResponse } from "@ytscan/core";
-import { AppPanel, EmptyState } from "@/components/app/app-ui";
+import { AppPanel, EmptyState, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import { formatRelativeDate } from "@/lib/formatters";
@@ -91,6 +91,18 @@ export default function PersonaModelDetailPage() {
     { enabled: Boolean(model?.channelSlug), pollMs: model?.status === "ready" ? null : 5000 }
   );
 
+  if (modelResponse.error) {
+    return (
+      <main className="app-page pb-10 pt-4 lg:pt-0">
+        <ErrorState
+          title="Persona model unavailable"
+          description="We couldn't load this persona model right now. Retry the page and try again."
+          action={<Button onClick={() => modelResponse.refetch()}>Retry</Button>}
+        />
+      </main>
+    );
+  }
+
   if (!model) {
     return (
       <main className="app-page pb-10 pt-4 lg:pt-0">
@@ -116,6 +128,7 @@ export default function PersonaModelDetailPage() {
   const stage = latestJob?.stage ?? model.status;
   const isReady = model.status === "ready";
   const isFailed = model.status === "failed";
+  const channelError = Boolean(model.channelSlug && channel.error);
 
   function handleRetrain() {
     const currentModel = model;
@@ -296,6 +309,14 @@ export default function PersonaModelDetailPage() {
           <EmptyState
             title="No channel attached"
             description="This persona model is missing its source channel, so it cannot be used in Script Lab."
+          />
+        ) : null}
+
+        {channelError ? (
+          <ErrorState
+            title="Channel context unavailable"
+            description="The source channel for this persona model couldn't be loaded. Retry the page and try again."
+            action={<Button variant="outline" onClick={() => channel.refetch()}>Retry channel</Button>}
           />
         ) : null}
 

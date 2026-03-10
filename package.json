@@ -15,10 +15,10 @@
     "lint:web": "npm run lint --workspace=apps/web",
     "deploy": "npm run deploy --workspace=apps/api",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "build:artifacts": "npm run build:artifacts --workspace=@ytscan/scripts --",
-    "vectorize:upsert": "npm run vectorize:upsert --workspace=@ytscan/scripts --",
-    "scan:run": "npm run scan:run --workspace=@ytscan/scripts --",
-    "media:run": "npm run media:run --workspace=@ytscan/scripts --"
+    "build:artifacts": "tsx packages/scripts/src/ingest/build-channel-artifacts.ts",
+    "vectorize:upsert": "tsx packages/scripts/src/vectorize/upsert-transcript-chunks.ts",
+    "scan:run": "tsx packages/scripts/src/scan/run-scan-jobs.ts",
+    "media:run": "tsx packages/scripts/src/generation/run-generation-jobs.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

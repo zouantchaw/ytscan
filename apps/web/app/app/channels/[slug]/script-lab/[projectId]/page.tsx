@@ -15,7 +15,7 @@ import type {
   ScriptProjectResponse,
   ThumbnailBriefVersion,
 } from "@ytscan/core";
-import { AppPanel, ChannelAvatar, EmptyState } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, EmptyState, ErrorState } from "@/components/app/app-ui";
 import {
   ScriptLabWorkflowSidebar,
   type ScriptLabViewStep,
@@ -898,6 +898,31 @@ export default function ScriptLabProjectPage() {
     { pollMs: 5000 }
   );
   const personaModels = useBackendQuery<PersonaModelListResponse>("/persona-models");
+
+  if (projectResponse.error) {
+    return (
+      <main className="pb-10">
+        <Breadcrumb slug={slug} projectId={projectId} step="research" />
+        <div className="flex min-h-[calc(100vh-145px)]">
+          <ScriptLabWorkflowSidebar activeStep="research" channelSlug={slug} projectId={projectId} />
+          <section className="flex-1 px-6 py-12 md:px-10 xl:px-12">
+            <ErrorState
+              title="Script project unavailable"
+              description="The app could not load this Script Lab project. Retry the request or return to the project list."
+              action={
+                <div className="flex items-center gap-3">
+                  <Button onClick={() => projectResponse.refetch()}>Retry</Button>
+                  <Button asChild variant="outline">
+                    <Link href={`/app/channels/${slug}/script-lab/projects`}>Back to Projects</Link>
+                  </Button>
+                </div>
+              }
+            />
+          </section>
+        </div>
+      </main>
+    );
+  }
 
   if (!projectResponse.data?.project) {
     return (

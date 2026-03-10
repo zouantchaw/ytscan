@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChannelSummary, MeResponse } from "@ytscan/core";
-import { AppPanel } from "@/components/app/app-ui";
+import { AppPanel, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useBackendQuery } from "@/lib/backend-client";
@@ -15,6 +15,27 @@ export default function SettingsWorkspacePage() {
   const me = useBackendQuery<MeResponse>("/me");
   const channels = useBackendQuery<ChannelCollectionResponse>("/channels");
   const workspace = me.data?.workspace;
+
+  if (me.error || channels.error) {
+    return (
+      <section className="max-w-[640px]">
+        <ErrorState
+          title="Workspace settings are unavailable"
+          description="We couldn't load your workspace details. Retry the page and try again."
+          action={
+            <div className="flex items-center gap-3">
+              <Button variant="outline" onClick={() => me.refetch()}>
+                Retry workspace
+              </Button>
+              <Button variant="outline" onClick={() => channels.refetch()}>
+                Retry channels
+              </Button>
+            </div>
+          }
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="max-w-[640px] space-y-8">

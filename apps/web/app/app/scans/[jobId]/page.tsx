@@ -5,7 +5,7 @@ import { Check, CircleAlert, Clock3, LoaderCircle, Sparkles, XCircle } from "luc
 import { useParams, useRouter } from "next/navigation";
 import { useMemo, useTransition } from "react";
 import type { ChannelDashboard, ScanJob } from "@ytscan/core";
-import { AppPanel, ChannelAvatar, VideoThumbnail } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, ErrorState, VideoThumbnail } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import { formatRelativeDate } from "@/lib/formatters";
@@ -184,6 +184,25 @@ export default function ScanJobPage() {
         // noop; the page already reflects terminal job state
       }
     });
+  }
+
+  if (jobResponse.error) {
+    return (
+      <main className="app-page flex min-h-[calc(100vh-140px)] items-center justify-center pb-10 pt-4 lg:pt-0">
+        <ErrorState
+          title="Scan unavailable"
+          description="The app could not load this scan job. Retry the request or return to the scan list and reopen it."
+          action={
+            <div className="flex items-center gap-3">
+              <Button onClick={() => jobResponse.refetch()}>Retry</Button>
+              <Button asChild variant="outline">
+                <Link href="/app/channels">Back to Channels</Link>
+              </Button>
+            </div>
+          }
+        />
+      </main>
+    );
   }
 
   if (!job) {

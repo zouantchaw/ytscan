@@ -7,7 +7,7 @@ import type {
   ChannelDashboard,
   ChannelSummary,
 } from "@ytscan/core";
-import { AppPanel, ChannelAvatar, EmptyState } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, EmptyState, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import {
@@ -83,6 +83,29 @@ export default function ChannelComparePage() {
           description="Scan a second channel to unlock side-by-side comparison and gap analysis."
           actionLabel="+ Scan Channel"
           actionHref="/app/scans/new"
+        />
+      </main>
+    );
+  }
+
+  if (channels.error || comparison.error || leftDashboard.error || rightDashboard.error) {
+    return (
+      <main className="app-page pb-10 pt-4 lg:pt-0">
+        <ErrorState
+          title="Comparison unavailable"
+          description="The app could not load this competitor comparison. Retry the request or pick a different competitor."
+          action={
+            <Button
+              onClick={() => {
+                channels.refetch();
+                comparison.refetch();
+                leftDashboard.refetch();
+                rightDashboard.refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
         />
       </main>
     );

@@ -1,12 +1,24 @@
 "use client";
 
 import type { MeResponse } from "@ytscan/core";
-import { AppPanel } from "@/components/app/app-ui";
+import { AppPanel, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 
 export default function SettingsMembersPage() {
   const me = useBackendQuery<MeResponse>("/me");
+
+  if (me.error) {
+    return (
+      <section className="max-w-[640px]">
+        <ErrorState
+          title="Members are unavailable"
+          description="We couldn't load the workspace member information. Retry the page and try again."
+          action={<Button variant="outline" onClick={() => me.refetch()}>Retry</Button>}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="max-w-[640px] space-y-8">

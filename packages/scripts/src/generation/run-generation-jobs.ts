@@ -103,6 +103,22 @@ type ScenePlan = {
 
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
+function assertWorkerEnvironment(): void {
+  const missing: string[] = [];
+
+  if (!INTERNAL_RUNNER_TOKEN) {
+    missing.push("INTERNAL_RUNNER_TOKEN");
+  }
+
+  if (!GEMINI_API_KEY) {
+    missing.push("GEMINI_API_KEY");
+  }
+
+  if (missing.length) {
+    throw new Error(`Missing required media worker env: ${missing.join(", ")}`);
+  }
+}
+
 function ensureDir(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -174,8 +190,15 @@ async function leaseJob(jobId?: string): Promise<LeasedGenerationJob | null> {
       method: "POST",
       body: JSON.stringify(
         jobId
-          ? { jobId, jobTypes: ["thumbnail_images", "previs"], providers: ["internal"] }
-          : { jobTypes: ["thumbnail_images", "previs"], providers: ["internal"] }
+          ? {
+              jobId,
+              jobTypes: ["thumbnail_images", "previs"],
+              providers: ["gemini", "internal"],
+            }
+          : {
+              jobTypes: ["thumbnail_images", "previs"],
+              providers: ["gemini", "internal"],
+            }
       ),
     }
   );
@@ -758,6 +781,8 @@ async function resolveTargetJob(requestedJobId: string | undefined): Promise<Lea
 }
 
 async function main(): Promise<void> {
+  assertWorkerEnvironment();
+
   const { values } = parseArgs({
     args: process.argv.slice(2),
     options: {

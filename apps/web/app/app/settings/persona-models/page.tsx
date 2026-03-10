@@ -9,7 +9,7 @@ import type {
   PersonaModelResponse,
   PersonaModelSummary,
 } from "@ytscan/core";
-import { AppPanel, ChannelAvatar } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, EmptyState, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import { cn } from "@/lib/utils";
@@ -132,17 +132,37 @@ export default function PersonaModelsPage() {
           </Button>
         </section>
 
-        <section className="grid gap-4">
-          {rows.map(({ channel, model }) => (
-            <PersonaModelRow
-              key={channel.slug}
-              channel={channel}
-              model={model}
-              isPending={isPending && activeJobKey === channel.slug}
-              onTrain={() => runTrainFlow(channel.slug, model)}
-            />
-          ))}
-        </section>
+        {channels.error || personaModels.error ? (
+          <ErrorState
+            title="Persona models unavailable"
+            description="The app could not load your channel and persona model data. Retry to refresh the workspace state."
+            action={<Button onClick={() => {
+              channels.refetch();
+              personaModels.refetch();
+            }}>Retry</Button>}
+          />
+        ) : channels.isLoading || personaModels.isLoading ? (
+          <AppPanel className="h-[220px]" />
+        ) : rows.length ? (
+          <section className="grid gap-4">
+            {rows.map(({ channel, model }) => (
+              <PersonaModelRow
+                key={channel.slug}
+                channel={channel}
+                model={model}
+                isPending={isPending && activeJobKey === channel.slug}
+                onTrain={() => runTrainFlow(channel.slug, model)}
+              />
+            ))}
+          </section>
+        ) : (
+          <EmptyState
+            title="No channels to train yet"
+            description="Scan at least one channel to create a persona model from its transcript corpus."
+            actionLabel="+ Scan New Channel"
+            actionHref="/app/scans/new"
+          />
+        )}
 
         <AppPanel className="bg-secondary px-5 py-5">
           <p className="text-[13px] leading-6 text-muted-foreground">

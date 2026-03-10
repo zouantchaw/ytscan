@@ -7,7 +7,7 @@ import type {
   PersonaModelListResponse,
   ScriptProjectResponse,
 } from "@ytscan/core";
-import { AppPanel, ChannelAvatar } from "@/components/app/app-ui";
+import { AppPanel, ChannelAvatar, ErrorState } from "@/components/app/app-ui";
 import { ScriptLabWorkflowSidebar } from "@/components/app/script-lab-workflow";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,6 +36,38 @@ export default function ScriptLabTopicPage() {
   const activePersona = seededPersona ?? availablePersonas[0] ?? null;
   const [usePersonaModel, setUsePersonaModel] = useState(Boolean(seededPersonaModelId));
   const personaEnabled = Boolean(activePersona) && usePersonaModel;
+
+  if (channel.error) {
+    return (
+      <main className="flex min-h-[calc(100vh-69px)]">
+        <ScriptLabWorkflowSidebar activeStep="topic_input" channelSlug={slug} />
+
+        <section className="flex-1 px-6 py-12 md:px-10 xl:px-20 xl:py-[60px]">
+          <ErrorState
+            title="Script Lab is unavailable right now"
+            description="We couldn't load this channel's script workspace. Retry the page and try again."
+            action={<Button onClick={() => channel.refetch()}>Retry</Button>}
+          />
+        </section>
+      </main>
+    );
+  }
+
+  if (personaModels.error) {
+    return (
+      <main className="flex min-h-[calc(100vh-69px)]">
+        <ScriptLabWorkflowSidebar activeStep="topic_input" channelSlug={slug} />
+
+        <section className="flex-1 px-6 py-12 md:px-10 xl:px-20 xl:py-[60px]">
+          <ErrorState
+            title="Persona models are unavailable"
+            description="We couldn't load the available voice models for this channel. Retry the page and try again."
+            action={<Button onClick={() => personaModels.refetch()}>Retry</Button>}
+          />
+        </section>
+      </main>
+    );
+  }
 
   async function createProject(runResearch: boolean) {
     if (!topic.trim()) {

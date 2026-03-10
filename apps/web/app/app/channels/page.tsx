@@ -5,6 +5,7 @@ import type { ChannelDashboard, ChannelSummary } from "@ytscan/core";
 import {
   AppPanel,
   ChannelAvatar,
+  ErrorState,
   EmptyState,
   PageLoading,
 } from "@/components/app/app-ui";
@@ -106,6 +107,12 @@ export default function ChannelSelectorPage() {
 
         {channels.isLoading ? (
           <PageLoading />
+        ) : channels.error ? (
+          <ErrorState
+            title="Channels unavailable"
+            description="The app could not load your workspace channels. Retry the request to pull the latest state from the backend."
+            action={<Button onClick={() => channels.refetch()}>Retry</Button>}
+          />
         ) : channels.data?.items.length ? (
           <div className="grid gap-6 md:grid-cols-2">
             {channels.data.items.map((channel) => (

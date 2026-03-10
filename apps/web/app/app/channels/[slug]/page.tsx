@@ -10,7 +10,15 @@ import type {
   TopicClusterSummary,
   VideoSummary,
 } from "@ytscan/core";
-import { AppPanel, ChannelAvatar, MetricCard, MetricDetail, TierBadge, VideoThumbnail } from "@/components/app/app-ui";
+import {
+  AppPanel,
+  ChannelAvatar,
+  ErrorState,
+  MetricCard,
+  MetricDetail,
+  TierBadge,
+  VideoThumbnail,
+} from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import { getChannelHandle } from "@/lib/channel-ui";
@@ -143,6 +151,27 @@ export default function ChannelDashboardPage() {
   const recentVideos = useBackendQuery<ChannelVideosResponse>(
     `/channels/${encodeURIComponent(slug)}/videos?limit=30&sort=recent`
   );
+
+  if (dashboard.error || recentVideos.error) {
+    return (
+      <main className="app-page py-8">
+        <ErrorState
+          title="Channel dashboard unavailable"
+          description="The app could not load this channel dashboard. Retry the request to refresh the latest channel data."
+          action={
+            <Button
+              onClick={() => {
+                dashboard.refetch();
+                recentVideos.refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      </main>
+    );
+  }
 
   async function handleRescan() {
     const currentChannel = dashboard.data;

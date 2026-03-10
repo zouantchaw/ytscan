@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import type { ChannelVideosResponse, VideoSummary } from "@ytscan/core";
-import { AppPanel, TierBadge, VideoThumbnail } from "@/components/app/app-ui";
+import { AppPanel, ErrorState, TierBadge, VideoThumbnail } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import {
@@ -86,6 +86,18 @@ export default function ThumbnailGalleryPage() {
       : videos.data?.items ?? [];
   const selectedVideo =
     visibleVideos.find((video) => video.youtubeId === selectedId) ?? visibleVideos[0] ?? null;
+
+  if (videos.error) {
+    return (
+      <main className="app-page py-8">
+        <ErrorState
+          title="Thumbnail gallery unavailable"
+          description="The app could not load thumbnail analysis for this channel. Retry to refresh the latest video and VLM data."
+          action={<Button onClick={() => videos.refetch()}>Retry</Button>}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app-page py-8">

@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import type { ChannelDashboard, HookLibraryResponse, HookSummary } from "@ytscan/core";
-import { AppPanel, EmptyState } from "@/components/app/app-ui";
+import { AppPanel, EmptyState, ErrorState } from "@/components/app/app-ui";
+import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import { formatCompactNumber } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
@@ -69,6 +70,27 @@ export default function HookLibraryPage() {
     0
   );
   const bestPattern = patternStats[bestPatternIndex];
+
+  if (channel.error || hookLibrary.error) {
+    return (
+      <main className="app-page py-9">
+        <ErrorState
+          title="Hook library unavailable"
+          description="The app could not load hook rankings for this channel. Retry to refresh the latest hook data."
+          action={
+            <Button
+              onClick={() => {
+                channel.refetch();
+                hookLibrary.refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app-page py-9">

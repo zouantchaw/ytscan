@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useParams } from "next/navigation";
 import type { PersonaModelResponse } from "@ytscan/core";
-import { AppPanel } from "@/components/app/app-ui";
+import { AppPanel, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import { formatRelativeDate } from "@/lib/formatters";
@@ -98,6 +98,18 @@ export default function PersonaModelHistoryPage() {
   );
 
   const model = response.data?.personaModel ?? null;
+
+  if (response.error) {
+    return (
+      <main className="app-page pb-10 pt-4 lg:pt-0">
+        <ErrorState
+          title="Persona history unavailable"
+          description="We couldn't load the training history for this persona model. Retry the page and try again."
+          action={<Button onClick={() => response.refetch()}>Retry</Button>}
+        />
+      </main>
+    );
+  }
 
   async function handleTrainNewVersion() {
     if (!model) return;

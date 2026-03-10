@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { useParams } from "next/navigation";
 import type { ScriptProjectListResponse, ScriptProjectSummary } from "@ytscan/core";
-import { AppPanel, EmptyState } from "@/components/app/app-ui";
+import { AppPanel, EmptyState, ErrorState } from "@/components/app/app-ui";
 import { Button } from "@/components/ui/button";
 import { useBackendQuery } from "@/lib/backend-client";
 import { formatRelativeDate } from "@/lib/formatters";
@@ -55,6 +55,18 @@ export default function ScriptLabProjectsPage() {
   const channelProjects = useMemo(() => {
     return (projects.data?.items ?? []).filter((project) => project.channelSlug === slug);
   }, [projects.data?.items, slug]);
+
+  if (projects.error) {
+    return (
+      <main className="app-page pb-10 pt-4 lg:pt-0">
+        <ErrorState
+          title="Projects are unavailable"
+          description="We couldn't load this channel's Script Lab projects. Retry the page and try again."
+          action={<Button onClick={() => projects.refetch()}>Retry</Button>}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app-page pb-10 pt-4 lg:pt-0">
