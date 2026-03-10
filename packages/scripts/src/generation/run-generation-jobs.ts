@@ -20,7 +20,12 @@ const INTERNAL_RUNNER_TOKEN = process.env.INTERNAL_RUNNER_TOKEN || "";
 const POLL_INTERVAL_MS = Number(process.env.MEDIA_POLL_INTERVAL_SECONDS || "15") * 1000;
 const HEARTBEAT_INTERVAL_MS = Number(process.env.MEDIA_HEARTBEAT_INTERVAL_SECONDS || "60") * 1000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
+const GEMINI_PREVIS_IMAGE_MODEL =
+  process.env.GEMINI_PREVIS_IMAGE_MODEL || process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
+const GEMINI_THUMBNAIL_IMAGE_MODEL =
+  process.env.GEMINI_THUMBNAIL_IMAGE_MODEL ||
+  process.env.GEMINI_IMAGE_MODEL ||
+  "gemini-3-pro-image-preview";
 const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
 const GEMINI_TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Kore";
 const PREVIS_SCENE_DURATION_SECONDS = Number(process.env.PREVIS_SCENE_DURATION_SECONDS || "5");
@@ -324,15 +329,18 @@ function extractConceptSections(briefContent: string): Array<{ title: string; bo
     .filter((section) => section.body);
 
   return sections.length
-    ? sections.slice(0, 3)
+    ? sections.slice(0, 2)
     : [
         { title: "Concept 1", body: briefContent.trim() },
         { title: "Concept 2", body: briefContent.trim() },
-        { title: "Concept 3", body: briefContent.trim() },
       ];
 }
 
-async function generateImageBuffer(prompt: string, referenceImages: ReferenceImage[]): Promise<Buffer> {
+async function generateImageBuffer(
+  prompt: string,
+  referenceImages: ReferenceImage[],
+  model: string
+): Promise<Buffer> {
   if (!ai) {
     throw new Error("GEMINI_API_KEY is required for media generation.");
   }
@@ -343,7 +351,7 @@ async function generateImageBuffer(prompt: string, referenceImages: ReferenceIma
   ];
 
   const response = await ai.models.generateContent({
-    model: GEMINI_IMAGE_MODEL,
+    model,
     contents: [{ role: "user", parts }],
     config: {
       responseModalities: ["TEXT", "IMAGE"],
@@ -540,7 +548,11 @@ async function handleThumbnailImages(job: LeasedGenerationJob): Promise<JsonObje
       "Do not add watermarks or tiny unreadable text.",
     ].join("\n");
 
-    const imageBuffer = await generateImageBuffer(prompt, input.referenceImages ?? []);
+    const imageBuffer = await generateImageBuffer(
+      prompt,
+      input.referenceImages ?? [],
+      GEMINI_THUMBNAIL_IMAGE_MODEL
+    );
     const fileName = `${variant}.png`;
     const filePath = path.join(outputDir, fileName);
     fs.writeFileSync(filePath, imageBuffer);
@@ -553,6 +565,7 @@ async function handleThumbnailImages(job: LeasedGenerationJob): Promise<JsonObje
       variant,
       metadata: {
         conceptTitle: section.title,
+        model: GEMINI_THUMBNAIL_IMAGE_MODEL,
         prompt,
       },
     });
@@ -593,7 +606,11 @@ async function handlePrevis(job: LeasedGenerationJob): Promise<JsonObject> {
   for (let index = 0; index < scenes.length; index += 1) {
     const scene = scenes[index];
     const variant = `scene-${index + 1}`;
-    const imageBuffer = await generateImageBuffer(scene.prompt, input.referenceImages ?? []);
+    const imageBuffer = await generateImageBuffer(
+      scene.prompt,
+      input.referenceImages ?? [],
+      GEMINI_PREVIS_IMAGE_MODEL
+    );
     const frameFileName = `${variant}.png`;
     const framePath = path.join(outputDir, frameFileName);
     fs.writeFileSync(framePath, imageBuffer);
@@ -607,6 +624,7 @@ async function handlePrevis(job: LeasedGenerationJob): Promise<JsonObject> {
       variant,
       metadata: {
         caption: scene.caption,
+        model: GEMINI_PREVIS_IMAGE_MODEL,
         prompt: scene.prompt,
         title: scene.title,
       },
