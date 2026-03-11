@@ -1,0 +1,292 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import type {
+  ChannelSummary,
+  PersonaModelDetail,
+  PersonaModelListResponse,
+  PersonaModelResponse,
+  PersonaModelSummary,
+} from "@ytscan/core";
+import { AppPanel, ChannelAvatar, EmptyState, ErrorState } from "@/components/app/app-ui";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
+import { cn } from "@/lib/utils";
+
+type ChannelCollectionResponse = {
+  items: ChannelSummary[];
+  count: number;
+};
+
+function getStatusTone(status: string) {
+  if (status === "ready") return { dot: "bg-success", text: "text-success", label: "Ready" };
+  if (
+    status === "training" ||
+    status === "queued" ||
+    status === "running" ||
+    status === "provisioning"
+  ) {
+    return { dot: "bg-[#E3A234]", text: "text-[#E3A234]", label: "Training" };
+  }
+  if (status === "failed") {
+    return { dot: "bg-destructive", text: "text-destructive", label: "Failed" };
+  }
+  return { dot: "bg-placeholder", text: "text-muted-foreground", label: "Untrained" };
+}
+
+function isActivePersonaStatus(status: string | null | undefined) {
+  return (
+    status === "training" ||
+    status === "queued" ||
+    status === "running" ||
+    status === "provisioning"
+  );
+}
+
+function getLatestProgress(model: PersonaModelDetail | null) {
+  const latestJob = model?.generationJobs.find((job) => job.jobType === "persona_train") ?? null;
+  if (!latestJob) return null;
+  return Math.round(latestJob.progress * 100);
+}
+
+export function PersonaModelsPageContent() {
+  const [activeJobKey, setActiveJobKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const channels = useBackendQuery<ChannelCollectionResponse>("/channels");
+  const personaModels = useBackendQuery<PersonaModelListResponse>("/persona-models");
+  const refetchPersonaModels = personaModels.refetch;
+
+  const modelByChannel = useMemo(() => {
+    return new Map((personaModels.data?.items ?? []).map((item) => [item.channelSlug ?? "", item]));
+  }, [personaModels.data?.items]);
+
+  const rows = useMemo(() => {
+    return (channels.data?.items ?? []).map((channel) => ({
+      channel,
+      model: modelByChannel.get(channel.slug) ?? null,
+    }));
+  }, [channels.data?.items, modelByChannel]);
+
+  const shouldPollPersonaModels =
+    activeJobKey !== null || rows.some(({ model }) => isActivePersonaStatus(model?.status));
+
+  useEffect(() => {
+    if (!shouldPollPersonaModels) return;
+
+    const timer = window.setInterval(() => {
+      refetchPersonaModels();
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [refetchPersonaModels, shouldPollPersonaModels]);
+
+  const untrainedChannel = rows.find((row) => !row.model)?.channel ?? null;
+
+  function runTrainFlow(channelSlug: string, existingModel?: PersonaModelSummary | null) {
+    setError(null);
+    setActiveJobKey(channelSlug);
+    startTransition(async () => {
+      try {
+        const model =
+          existingModel ??
+          (
+            await fetchBackend<PersonaModelResponse>("/persona-models", {
+              method: "POST",
+              body: JSON.stringify({ channelSlug }),
+            })
+          ).personaModel;
+
+        await fetchBackend<PersonaModelResponse>(`/persona-models/${model.id}/train`, {
+          method: "POST",
+          body: JSON.stringify({ launchInstance: true }),
+        });
+
+        personaModels.refetch();
+      } catch (caughtError) {
+        setError(caughtError instanceof Error ? caughtError.message : "Unable to start training.");
+      } finally {
+        setActiveJobKey(null);
+      }
+    });
+  }
+
+  return (
+    <main className="app-page pb-10 pt-4 lg:pt-0">
+      <div className="max-w-[1104px] space-y-8">
+        <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
+              Persona Models
+            </h1>
+            <p className="max-w-[640px] text-[15px] leading-7 text-muted-foreground">
+              Train and manage reusable voice models for the channels already inside your studio.
+            </p>
+          </div>
+          <Button
+            onClick={() => untrainedChannel && runTrainFlow(untrainedChannel.slug)}
+            disabled={!untrainedChannel || isPending}
+          >
+            + Train New Model
+          </Button>
+        </section>
+
+        {channels.error || personaModels.error ? (
+          <ErrorState
+            title="Persona models unavailable"
+            description="The app could not load your channel and persona model data. Retry to refresh the studio state."
+            action={
+              <Button
+                onClick={() => {
+                  channels.refetch();
+                  personaModels.refetch();
+                }}
+              >
+                Retry
+              </Button>
+            }
+          />
+        ) : channels.isLoading || personaModels.isLoading ? (
+          <section className="grid gap-4">
+            {Array.from({ length: 2 }).map((_, index) => (
+              <AppPanel
+                key={index}
+                className="flex flex-col gap-5 px-6 py-6 lg:flex-row lg:items-center"
+              >
+                <Skeleton className="size-[52px] rounded-full" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-6 w-40" />
+                  <Skeleton className="h-4 w-56" />
+                </div>
+                <div className="w-full space-y-2 lg:w-[140px] lg:text-right">
+                  <Skeleton className="ml-auto h-5 w-24" />
+                  <Skeleton className="ml-auto h-4 w-16" />
+                </div>
+                <div className="flex w-full items-center gap-2 lg:w-[110px]">
+                  <Skeleton className="size-2 rounded-full" />
+                  <Skeleton className="h-4 w-20" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Skeleton className="h-9 w-24 rounded-[10px]" />
+                  <Skeleton className="h-9 w-24 rounded-[10px]" />
+                </div>
+              </AppPanel>
+            ))}
+          </section>
+        ) : rows.length ? (
+          <section className="grid gap-4">
+            {rows.map(({ channel, model }) => (
+              <PersonaModelRow
+                key={channel.slug}
+                channel={channel}
+                model={model}
+                isPending={isPending && activeJobKey === channel.slug}
+                onTrain={() => runTrainFlow(channel.slug, model)}
+              />
+            ))}
+          </section>
+        ) : (
+          <EmptyState
+            title="No channels to train yet"
+            description="Scan at least one channel to create a persona model from its transcript corpus."
+            actionLabel="+ Scan New Channel"
+            actionHref="/app/scans/new"
+          />
+        )}
+
+        <AppPanel className="bg-secondary px-5 py-5">
+          <p className="text-[13px] leading-6 text-muted-foreground">
+            Persona training runs on Lambda Labs compute. Keep this area internal until you are
+            comfortable with turnaround time, costs, and the quality of the exported voice model.
+          </p>
+        </AppPanel>
+
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+    </main>
+  );
+}
+
+function PersonaModelRow({
+  channel,
+  model,
+  isPending,
+  onTrain,
+}: {
+  channel: ChannelSummary;
+  model: PersonaModelSummary | null;
+  isPending: boolean;
+  onTrain: () => void;
+}) {
+  const detail = useBackendQuery<PersonaModelResponse>(
+    model ? `/persona-models/${encodeURIComponent(model.id)}` : null,
+    {
+      enabled: Boolean(model),
+      pollMs: isActivePersonaStatus(model?.status) ? 5000 : null,
+    }
+  );
+  const progress = getLatestProgress(detail.data?.personaModel ?? null);
+  const status = model?.status ?? "untrained";
+  const isReady = status === "ready";
+  const isActive = isActivePersonaStatus(status);
+  const isFailed = status === "failed";
+  const statusTone = getStatusTone(status);
+  const baseModel = model?.baseModel
+    ? model.baseModel.split("/").at(-1)?.replace("-Instruct", "") ?? model.baseModel
+    : "—";
+
+  return (
+    <AppPanel
+      id={`model-${model?.id ?? channel.slug}`}
+      className="flex flex-col gap-5 px-6 py-6 lg:flex-row lg:items-center"
+    >
+      <ChannelAvatar channelName={channel.channelName} channelSlug={channel.slug} size="lg" />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-display text-[18px] font-semibold tracking-[-0.03em] text-foreground">
+          {channel.channelName}
+        </p>
+        <p className="text-[13px] text-muted-foreground">
+          {model
+            ? `${channel.totalVideos} transcripts · ${model.datasetExamples} training examples`
+            : `${channel.totalVideos} transcripts · Not yet trained`}
+        </p>
+      </div>
+      <div className="w-full space-y-1 lg:w-[140px] lg:text-right">
+        <p className="text-[13px] font-medium text-foreground">{baseModel}</p>
+        <p className="text-[12px] text-muted-foreground">
+          {model ? `Provider: ${model.provider}` : "Select base model"}
+        </p>
+      </div>
+      <div className="flex w-full items-center gap-2 lg:w-[110px]">
+        <span className={cn("size-2 rounded-full", statusTone.dot)} />
+        <span className={cn("text-[13px] font-medium", statusTone.text)}>{statusTone.label}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {model && progress !== null && (isActive || isFailed) ? (
+          <span className="rounded-[6px] bg-secondary px-3 py-1.5 text-[12px] font-medium text-muted-foreground">
+            {progress}%
+          </span>
+        ) : null}
+        <Button
+          variant={model ? "outline" : "default"}
+          size="sm"
+          onClick={onTrain}
+          disabled={isPending || isActive}
+        >
+          {isPending
+            ? "Starting..."
+            : isActive
+              ? "Training..."
+              : model && (isReady || isFailed)
+                ? "Retrain"
+                : "Train"}
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href={model ? `/app/persona/${model.id}` : "/app/persona"}>Details</Link>
+        </Button>
+      </div>
+    </AppPanel>
+  );
+}

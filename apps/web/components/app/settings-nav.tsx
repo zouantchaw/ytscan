@@ -6,9 +6,9 @@ import { cn } from "@/lib/utils";
 
 const settingsItems = [
   { label: "Account", href: "/app/settings/account" },
-  { label: "Workspace", href: "/app/settings/workspace" },
+  { label: "Studio", href: "/app/settings/workspace" },
   { label: "Billing", href: "/app/settings/billing" },
-  { label: "Members", href: "/app/settings/members" },
+  { label: "Access", href: "/app/settings/members" },
 ];
 
 export function SettingsNav() {

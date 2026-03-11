@@ -18,7 +18,8 @@
     "build:artifacts": "tsx packages/scripts/src/ingest/build-channel-artifacts.ts",
     "vectorize:upsert": "tsx packages/scripts/src/vectorize/upsert-transcript-chunks.ts",
     "scan:run": "tsx packages/scripts/src/scan/run-scan-jobs.ts",
-    "media:run": "tsx packages/scripts/src/generation/run-generation-jobs.ts"
+    "media:run": "tsx packages/scripts/src/generation/run-generation-jobs.ts",
+    "worker:run": "tsx packages/scripts/src/workers/run-background-workers.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

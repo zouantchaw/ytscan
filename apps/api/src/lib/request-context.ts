@@ -7,6 +7,7 @@ type WorkspaceRow = {
   id: string;
   slug: string;
   name: string;
+  created_by_user_id?: string;
   created_at: string;
   updated_at: string;
   role: string;
@@ -58,6 +59,87 @@ async function fetchMemberships(userId: string, env: Env): Promise<WorkspaceRow[
   return results;
 }
 
+function isSingleTenantMode(env: Env): boolean {
+  const value = env.SINGLE_TENANT_MODE?.trim().toLowerCase();
+  return value === "true" || value === "1" || value === "yes" || value === "on";
+}
+
+function getPrimaryWorkspaceSlug(env: Env): string {
+  return env.PRIMARY_WORKSPACE_SLUG?.trim() || "ytscan-studio";
+}
+
+function getPrimaryWorkspaceName(env: Env): string {
+  return env.PRIMARY_WORKSPACE_NAME?.trim() || "YTScan Studio";
+}
+
+async function fetchWorkspaceById(workspaceId: string, env: Env): Promise<WorkspaceRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT
+          id,
+          slug,
+          name,
+          created_by_user_id,
+          created_at,
+          updated_at,
+          'member' AS role
+        FROM workspaces
+        WHERE id = ?
+      `
+    )
+      .bind(workspaceId)
+      .first<WorkspaceRow>()) ?? null
+  );
+}
+
+async function fetchWorkspaceBySlug(slug: string, env: Env): Promise<WorkspaceRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT
+          id,
+          slug,
+          name,
+          created_by_user_id,
+          created_at,
+          updated_at,
+          'member' AS role
+        FROM workspaces
+        WHERE slug = ?
+      `
+    )
+      .bind(slug)
+      .first<WorkspaceRow>()) ?? null
+  );
+}
+
+async function fetchWorkspaceMembership(
+  workspaceId: string,
+  userId: string,
+  env: Env
+): Promise<WorkspaceRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT
+          w.id,
+          w.slug,
+          w.name,
+          w.created_by_user_id,
+          w.created_at,
+          w.updated_at,
+          wm.role
+        FROM workspaces w
+        JOIN workspace_members wm ON wm.workspace_id = w.id
+        WHERE w.id = ? AND wm.user_id = ?
+      `
+    )
+      .bind(workspaceId, userId)
+      .first<WorkspaceRow>()) ?? null
+  );
+}
+
 async function attachUnassignedData(workspaceId: string, userId: string, env: Env): Promise<void> {
   await Promise.all([
     env.DB.prepare(
@@ -81,6 +163,122 @@ async function attachUnassignedData(workspaceId: string, userId: string, env: En
       .bind(workspaceId, userId)
       .run(),
   ]);
+}
+
+async function ensureWorkspaceMembership(
+  workspace: WorkspaceRow,
+  session: NonNullable<AuthSession>,
+  env: Env
+): Promise<WorkspaceRow> {
+  const existingMembership = await fetchWorkspaceMembership(workspace.id, session.user.id, env);
+  if (existingMembership) return existingMembership;
+
+  const createdAt = new Date().toISOString();
+  const role = workspace.created_by_user_id === session.user.id ? "owner" : "member";
+
+  await env.DB.prepare(
+    `
+      INSERT INTO workspace_members (workspace_id, user_id, role, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `
+  )
+    .bind(workspace.id, session.user.id, role, createdAt, createdAt)
+    .run();
+
+  return (
+    (await fetchWorkspaceMembership(workspace.id, session.user.id, env)) ?? {
+      ...workspace,
+      role,
+    }
+  );
+}
+
+async function updatePrimaryWorkspaceMetadata(
+  workspace: WorkspaceRow,
+  env: Env
+): Promise<WorkspaceRow> {
+  const desiredSlug = getPrimaryWorkspaceSlug(env);
+  const desiredName = getPrimaryWorkspaceName(env);
+
+  if (workspace.slug === desiredSlug && workspace.name === desiredName) {
+    return workspace;
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `
+      UPDATE workspaces
+      SET slug = ?, name = ?, updated_at = ?
+      WHERE id = ?
+    `
+  )
+    .bind(desiredSlug, desiredName, now, workspace.id)
+    .run();
+
+  return {
+    ...workspace,
+    name: desiredName,
+    slug: desiredSlug,
+    updated_at: now,
+  };
+}
+
+async function resolveOrCreatePrimaryWorkspace(
+  session: NonNullable<AuthSession>,
+  env: Env
+): Promise<WorkspaceRow> {
+  const configuredWorkspaceId = env.PRIMARY_WORKSPACE_ID?.trim();
+  const configuredWorkspaceSlug = getPrimaryWorkspaceSlug(env);
+  const configuredWorkspaceName = getPrimaryWorkspaceName(env);
+  const createdAt = new Date().toISOString();
+
+  let workspace =
+    (configuredWorkspaceId
+      ? await fetchWorkspaceById(configuredWorkspaceId, env)
+      : null) ?? (await fetchWorkspaceBySlug(configuredWorkspaceSlug, env));
+
+  if (!workspace) {
+    const workspaceId = configuredWorkspaceId || crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        `
+          INSERT INTO workspaces (id, slug, name, created_by_user_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `
+      ).bind(
+        workspaceId,
+        configuredWorkspaceSlug,
+        configuredWorkspaceName,
+        session.user.id,
+        createdAt,
+        createdAt
+      ),
+      env.DB.prepare(
+        `
+          INSERT INTO workspace_members (workspace_id, user_id, role, created_at, updated_at)
+          VALUES (?, ?, 'owner', ?, ?)
+        `
+      ).bind(workspaceId, session.user.id, createdAt, createdAt),
+    ]);
+
+    await attachUnassignedData(workspaceId, session.user.id, env);
+
+    workspace = {
+      created_at: createdAt,
+      created_by_user_id: session.user.id,
+      id: workspaceId,
+      name: configuredWorkspaceName,
+      role: "owner",
+      slug: configuredWorkspaceSlug,
+      updated_at: createdAt,
+    };
+
+    return workspace;
+  }
+
+  const normalizedWorkspace = await updatePrimaryWorkspaceMetadata(workspace, env);
+  await attachUnassignedData(normalizedWorkspace.id, session.user.id, env);
+  return ensureWorkspaceMembership(normalizedWorkspace, session, env);
 }
 
 async function createDefaultWorkspace(
@@ -134,6 +332,10 @@ async function resolveWorkspace(
   session: NonNullable<AuthSession>,
   env: Env
 ): Promise<WorkspaceRow> {
+  if (isSingleTenantMode(env)) {
+    return resolveOrCreatePrimaryWorkspace(session, env);
+  }
+
   const memberships = await fetchMemberships(session.user.id, env);
   const requestedWorkspaceId = request.headers.get("x-workspace-id")?.trim();
 

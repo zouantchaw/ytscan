@@ -9,18 +9,21 @@ export default function SettingsBillingPage() {
           Billing
         </h2>
         <p className="text-[15px] leading-7 text-muted-foreground">
-          Review your current plan, usage, and payment setup for YTScan.
+          Review internal usage while the product is still running as a private studio.
         </p>
       </div>
 
       <AppPanel className="flex flex-col gap-5 px-6 py-6 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
-          <p className="text-[20px] font-semibold text-foreground">Pro Workspace</p>
+          <p className="text-[20px] font-semibold text-foreground">Internal Studio</p>
           <p className="text-sm text-muted-foreground">
-            Includes multi-channel research, persona training, and media generation workflows.
+            Billing is disabled while YTScan is being operated internally and validated with real
+            workflows.
           </p>
         </div>
-        <Button>Manage Plan</Button>
+        <Button variant="outline" disabled>
+          Billing Disabled
+        </Button>
       </AppPanel>
 
       <div className="space-y-4">
@@ -45,13 +48,17 @@ export default function SettingsBillingPage() {
         <div className="border-t border-separator" />
 
         <div className="space-y-2">
-          <p className="text-[15px] font-medium text-foreground">Payment method</p>
+          <p className="text-[15px] font-medium text-foreground">Billing status</p>
           <AppPanel className="flex items-center justify-between gap-4 px-5 py-4">
             <div>
-              <p className="text-sm font-medium text-foreground">Card ending in 4242</p>
-              <p className="text-[13px] text-muted-foreground">Update this once Stripe is connected.</p>
+              <p className="text-sm font-medium text-foreground">No payment processor connected</p>
+              <p className="text-[13px] text-muted-foreground">
+                Turn this on when YTScan is ready to charge external customers.
+              </p>
             </div>
-            <Button variant="outline">Update</Button>
+            <Button variant="outline" disabled>
+              Not Available
+            </Button>
           </AppPanel>
         </div>
       </div>

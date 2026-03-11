@@ -10,6 +10,7 @@ import type {
 import { AppPanel, ChannelAvatar, ErrorState } from "@/components/app/app-ui";
 import { ScriptLabWorkflowSidebar } from "@/components/app/script-lab-workflow";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchBackend, useBackendQuery } from "@/lib/backend-client";
 
@@ -68,6 +69,8 @@ export default function ScriptLabTopicPage() {
       </main>
     );
   }
+
+  const isBootstrapping = channel.isLoading || personaModels.isLoading;
 
   async function createProject(runResearch: boolean) {
     if (!topic.trim()) {
@@ -137,27 +140,40 @@ export default function ScriptLabTopicPage() {
 
             <div className="grid gap-6 lg:grid-cols-[1fr_0.95fr]">
               <div className="grid gap-3">
-                <label className="text-[15px] font-medium text-foreground">Channel</label>
-                <AppPanel className="flex items-center justify-between gap-4 px-4 py-4">
-                  <div className="flex items-center gap-3">
-                    <ChannelAvatar
-                      channelName={channel.data?.channelName ?? "Channel"}
-                      channelSlug={slug}
-                    />
-                    <span className="text-[15px] font-medium text-foreground">
-                      {channel.data?.channelName ?? "Loading channel..."}
-                    </span>
-                  </div>
-                  <span className="text-sm text-muted-foreground">Change</span>
-                </AppPanel>
+              <label className="text-[15px] font-medium text-foreground">Channel</label>
+              <AppPanel className="flex items-center justify-between gap-4 px-4 py-4">
+                <div className="flex items-center gap-3">
+                  {isBootstrapping ? (
+                    <>
+                      <Skeleton className="size-10 rounded-full" />
+                      <Skeleton className="h-5 w-40 rounded-full" />
+                    </>
+                  ) : (
+                    <>
+                      <ChannelAvatar
+                        channelName={channel.data?.channelName ?? "Channel"}
+                        channelSlug={slug}
+                      />
+                      <span className="text-[15px] font-medium text-foreground">
+                        {channel.data?.channelName ?? "Loading channel..."}
+                      </span>
+                    </>
+                  )}
+                </div>
+                <span className="text-sm text-muted-foreground">Change</span>
+              </AppPanel>
               </div>
 
               <div className="grid gap-3">
                 <label className="text-[15px] font-medium text-foreground">Target duration</label>
                 <AppPanel className="flex items-center justify-between gap-4 px-4 py-4">
-                  <span className="text-[15px] font-medium text-foreground">
-                    {channel.data?.stats.bestDuration?.label ?? "12-18 min"}
-                  </span>
+                  {isBootstrapping ? (
+                    <Skeleton className="h-5 w-24 rounded-full" />
+                  ) : (
+                    <span className="text-[15px] font-medium text-foreground">
+                      {channel.data?.stats.bestDuration?.label ?? "12-18 min"}
+                    </span>
+                  )}
                   <span className="text-sm text-muted-foreground">Sweet spot</span>
                 </AppPanel>
               </div>

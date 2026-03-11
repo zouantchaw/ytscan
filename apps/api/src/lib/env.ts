@@ -15,8 +15,12 @@ export type Env = {
   LAMBDA_DEFAULT_REGION?: string;
   LAMBDA_SSH_KEY_NAMES?: string;
   LAMBDA_TRAINING_REPO_RAW_BASE?: string;
+  PRIMARY_WORKSPACE_ID?: string;
+  PRIMARY_WORKSPACE_NAME?: string;
+  PRIMARY_WORKSPACE_SLUG?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM_EMAIL?: string;
   RESEND_FROM_NAME?: string;
+  SINGLE_TENANT_MODE?: string;
   TRANSCRIPTS_INDEX?: VectorizeIndex;
 };

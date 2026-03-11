@@ -21,6 +21,7 @@ import {
   type ScriptLabViewStep,
 } from "@/components/app/script-lab-workflow";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { buildBackendUrl, fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import { formatCompactNumber, formatRelativeDate } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
@@ -214,6 +215,55 @@ function Breadcrumb({
         </Link>
       </div>
     </div>
+  );
+}
+
+function ScriptLabProjectLoadingState({ slug, projectId }: { slug: string; projectId: string }) {
+  return (
+    <main className="pb-10">
+      <div className="border-b border-separator px-6 py-3 md:px-10 xl:px-12">
+        <Skeleton className="h-4 w-40 rounded-full" />
+      </div>
+      <div className="flex min-h-[calc(100vh-145px)]">
+        <ScriptLabWorkflowSidebar activeStep="research" channelSlug={slug} projectId={projectId} />
+        <section className="flex-1 px-6 py-9 md:px-10 xl:px-12">
+          <div className="grid gap-9 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="grid gap-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-28 rounded-full" />
+                  <Skeleton className="h-16 w-[360px] max-w-full rounded-[14px]" />
+                  <Skeleton className="h-7 w-[440px] max-w-full rounded-full" />
+                </div>
+                <Skeleton className="h-11 w-44 rounded-[12px]" />
+              </div>
+              <AppPanel className="h-[420px] px-6 py-6">
+                <div className="grid gap-4">
+                  <Skeleton className="h-6 w-56 rounded-full" />
+                  <Skeleton className="h-5 w-full rounded-full" />
+                  <Skeleton className="h-5 w-[92%] rounded-full" />
+                  <Skeleton className="h-5 w-[96%] rounded-full" />
+                  <Skeleton className="h-5 w-[84%] rounded-full" />
+                  <Skeleton className="h-40 w-full rounded-[12px]" />
+                </div>
+              </AppPanel>
+            </div>
+            <div className="grid gap-4">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <AppPanel key={index} className="px-5 py-5">
+                  <div className="space-y-3">
+                    <Skeleton className="h-6 w-32 rounded-full" />
+                    <Skeleton className="h-4 w-full rounded-full" />
+                    <Skeleton className="h-4 w-[80%] rounded-full" />
+                    <Skeleton className="h-4 w-[68%] rounded-full" />
+                  </div>
+                </AppPanel>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
   );
 }
 
@@ -925,19 +975,7 @@ export default function ScriptLabProjectPage() {
   }
 
   if (!projectResponse.data?.project) {
-    return (
-      <main className="pb-10">
-        <div className="border-b border-separator px-6 py-3 md:px-10 xl:px-12">
-          <div className="h-4 w-32 rounded-full bg-secondary" />
-        </div>
-        <div className="flex min-h-[calc(100vh-145px)]">
-          <ScriptLabWorkflowSidebar activeStep="research" channelSlug={slug} projectId={projectId} />
-          <section className="flex-1 px-6 py-12 md:px-10 xl:px-12">
-            <AppPanel className="h-[320px]" />
-          </section>
-        </div>
-      </main>
-    );
+    return <ScriptLabProjectLoadingState slug={slug} projectId={projectId} />;
   }
 
   const project = projectResponse.data.project;

@@ -51,63 +51,65 @@ export function ScriptLabWorkflowSidebar({
   const completed = new Set(completedSteps);
 
   return (
-    <aside className="hidden w-[280px] shrink-0 border-r border-separator px-6 py-6 lg:flex lg:flex-col">
-      <p className="mb-3 text-[13px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+    <aside className="hidden w-[280px] shrink-0 border-r border-separator px-6 py-6 lg:sticky lg:top-[89px] lg:flex lg:h-[calc(100dvh-89px)] lg:flex-col lg:self-start">
+      <p className="mb-3 shrink-0 text-[13px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Workflow
       </p>
-      <div className="grid gap-1">
-        {workflowSteps.map((step, index) => {
-          const href = getStepHref(channelSlug, step.id, projectId);
-          const isActive = step.id === activeStep;
-          const isCompleted = completed.has(step.id);
+      <div className="min-h-0 overflow-y-auto pr-1">
+        <div className="grid gap-1">
+          {workflowSteps.map((step, index) => {
+            const href = getStepHref(channelSlug, step.id, projectId);
+            const isActive = step.id === activeStep;
+            const isCompleted = completed.has(step.id);
 
-          const content = (
-            <>
-              <span
-                className={cn(
-                  "inline-flex size-[22px] items-center justify-center rounded-full text-[11px] font-semibold",
-                  isActive && "bg-primary text-white",
-                  isCompleted && !isActive && "bg-success text-white",
-                  !isActive && !isCompleted && "bg-secondary text-muted-foreground"
-                )}
-              >
-                {isCompleted && !isActive ? <Check className="size-3.5" /> : index + 1}
-              </span>
-              <span>{step.label}</span>
-            </>
-          );
+            const content = (
+              <>
+                <span
+                  className={cn(
+                    "inline-flex size-[22px] items-center justify-center rounded-full text-[11px] font-semibold",
+                    isActive && "bg-primary text-white",
+                    isCompleted && !isActive && "bg-success text-white",
+                    !isActive && !isCompleted && "bg-secondary text-muted-foreground"
+                  )}
+                >
+                  {isCompleted && !isActive ? <Check className="size-3.5" /> : index + 1}
+                </span>
+                <span>{step.label}</span>
+              </>
+            );
 
-          if (!href) {
+            if (!href) {
+              return (
+                <div
+                  key={step.id}
+                  className={cn(
+                    "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium transition-colors",
+                    isActive && "bg-foreground text-background",
+                    isCompleted && !isActive && "text-foreground",
+                    !isActive && !isCompleted && "text-muted-foreground"
+                  )}
+                >
+                  {content}
+                </div>
+              );
+            }
+
             return (
-              <div
+              <Link
                 key={step.id}
+                href={href}
                 className={cn(
                   "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium transition-colors",
-                  isActive && "bg-foreground text-background",
-                  isCompleted && !isActive && "text-foreground",
-                  !isActive && !isCompleted && "text-muted-foreground"
+                  isActive && "bg-foreground text-background hover:text-background",
+                  isCompleted && !isActive && "text-foreground hover:bg-secondary",
+                  !isActive && !isCompleted && "text-muted-foreground hover:text-foreground"
                 )}
               >
                 {content}
-              </div>
+              </Link>
             );
-          }
-
-          return (
-            <Link
-              key={step.id}
-              href={href}
-              className={cn(
-                "flex items-center gap-3 rounded-[10px] px-4 py-3 text-[15px] font-medium transition-colors",
-                isActive && "bg-foreground text-background hover:text-background",
-                isCompleted && !isActive && "text-foreground hover:bg-secondary",
-                !isActive && !isCompleted && "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {content}
-            </Link>
-          );
-        })}
+          })}
+        </div>
       </div>
     </aside>
   );

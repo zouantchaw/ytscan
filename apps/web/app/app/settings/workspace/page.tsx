@@ -41,20 +41,20 @@ export default function SettingsWorkspacePage() {
     <section className="max-w-[640px] space-y-8">
       <div className="space-y-2">
         <h2 className="font-display text-[32px] font-semibold tracking-[-0.04em] text-foreground">
-          Workspace
+          Studio
         </h2>
         <p className="text-[15px] leading-7 text-muted-foreground">
-          Manage your shared workspace settings, naming, and default channel context.
+          Review the shared studio that every signed-in operator lands in by default.
         </p>
       </div>
 
       <div className="space-y-5">
         <label className="grid gap-2">
-          <span className="text-[15px] font-medium text-foreground">Workspace name</span>
+          <span className="text-[15px] font-medium text-foreground">Studio name</span>
           <Input value={workspace?.name ?? ""} readOnly />
         </label>
         <label className="grid gap-2">
-          <span className="text-[15px] font-medium text-foreground">Workspace slug</span>
+          <span className="text-[15px] font-medium text-foreground">Studio slug</span>
           <Input value={workspace?.slug ?? ""} readOnly />
         </label>
       </div>
@@ -80,10 +80,10 @@ export default function SettingsWorkspacePage() {
 
       <div className="flex items-center gap-3">
         <Button variant="outline" disabled>
-          Rename workspace
+          Rename studio
         </Button>
         <p className="text-[13px] text-muted-foreground">
-          Workspace administration is enabled for owners only.
+          Studio administration is limited to maintainers.
         </p>
       </div>
     </section>

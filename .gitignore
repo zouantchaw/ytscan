@@ -21,6 +21,7 @@ data/channels/*/raw/
 data/channels/*/exports/
 data/channels/*/.checkpoints/
 data/channels/*/.logs/
+data/generated-media/
 
 *.log
 *.pid

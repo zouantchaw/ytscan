@@ -24,10 +24,10 @@ export default function SettingsMembersPage() {
     <section className="max-w-[640px] space-y-8">
       <div className="space-y-2">
         <h2 className="font-display text-[32px] font-semibold tracking-[-0.04em] text-foreground">
-          Members
+          Access
         </h2>
         <p className="text-[15px] leading-7 text-muted-foreground">
-          Invite collaborators and manage workspace roles as your team grows.
+          Manage the operators who can access the shared YTScan studio.
         </p>
       </div>
 
@@ -46,11 +46,12 @@ export default function SettingsMembersPage() {
           <div>
             <p className="text-[15px] font-medium text-foreground">Invitations</p>
             <p className="text-[13px] text-muted-foreground">
-              Member invites will appear here once multi-user workspaces are enabled.
+              New teammates are attached to the shared studio when access is granted. Invite flows
+              can be added here later without changing the rest of the app.
             </p>
           </div>
           <Button variant="outline" disabled>
-            Invite member
+            Manage access
           </Button>
         </div>
       </AppPanel>

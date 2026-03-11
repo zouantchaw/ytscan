@@ -9,6 +9,7 @@
     "vectorize:upsert": "tsx src/vectorize/upsert-transcript-chunks.ts",
     "scan:run": "tsx src/scan/run-scan-jobs.ts",
     "media:run": "tsx src/generation/run-generation-jobs.ts",
+    "worker:run": "tsx src/workers/run-background-workers.ts",
     "thumbnail:backfill": "tsx src/ops/backfill-thumbnail-analyses.ts"
   },
   "dependencies": {
