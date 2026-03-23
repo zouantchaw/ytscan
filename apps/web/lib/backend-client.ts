@@ -18,8 +18,15 @@ function normalizePath(path: string) {
   return path.startsWith("/") ? path : `/${path}`;
 }
 
+function normalizeBackendPath(path: string) {
+  const normalized = normalizePath(path);
+  if (normalized === "/api") return "";
+  if (normalized.startsWith("/api/")) return normalized.slice(4);
+  return normalized;
+}
+
 export function buildBackendUrl(path: string) {
-  return `/api/backend${normalizePath(path)}`;
+  return `/api/backend${normalizeBackendPath(path)}`;
 }
 
 export async function fetchBackend<T>(

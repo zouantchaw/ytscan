@@ -44,7 +44,7 @@ function ChannelSelectorCard({ channel }: { channel: ChannelSummary }) {
       : "text-destructive";
 
   return (
-    <Link href={`/app/channels/${channel.slug}`} className="block">
+    <Link href={`/app/channels/${channel.slug}/opportunities`} className="block">
       <AppPanel className="overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
         <div
           className={cn(
@@ -97,7 +97,7 @@ export default function ChannelSelectorPage() {
               Your Channels
             </h1>
             <p className="text-[15px] leading-7 text-muted-foreground">
-              Select a channel to view its dashboard, or scan a new one.
+              Select a channel to review its best next opportunities, or scan a new one.
             </p>
           </div>
           <Button asChild>

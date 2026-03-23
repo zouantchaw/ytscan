@@ -1,6 +1,9 @@
 import type {
   ChannelCompareResponse,
   ChannelDashboard,
+  ChannelOpportunitiesResponse,
+  ChannelOpportunity,
+  ChannelOpportunityEvidence,
   ChannelSummary,
   ChannelTopicsResponse,
   ChannelTrendsResponse,
@@ -120,6 +123,7 @@ type ScriptProjectRow = {
   workspace_id: string;
   channel_id: number | null;
   persona_model_id: string | null;
+  opportunity_json: string | null;
   title: string;
   topic: string;
   status: string;
@@ -145,6 +149,27 @@ type ScriptResearchItemRow = {
   score: number | null;
   metadata_json: string;
   created_at: string;
+};
+
+type OpportunityCandidate = {
+  id: string;
+  opportunityType: ChannelOpportunity["opportunityType"];
+  title: string;
+  topic: string;
+  angle: string;
+  rationale: string;
+  whyNow: string;
+  recommendedHook: string;
+  recommendedFormat: string;
+  recommendedDuration: string;
+  thumbnailDirection: string;
+  score: number;
+  channelEvidence: ChannelOpportunityEvidence[];
+  competitorEvidence: ChannelOpportunityEvidence[];
+  packageSeed: {
+    title: string;
+    topic: string;
+  };
 };
 
 type ScriptOutputRow = {
@@ -218,6 +243,82 @@ type GenerationAssetRow = {
   metadata_json: string;
   created_at: string;
 };
+
+const OPPORTUNITY_PRIORITY_TOKENS = new Set([
+  "acquisition",
+  "ai",
+  "asset",
+  "assets",
+  "boring",
+  "business",
+  "businesses",
+  "buy",
+  "buying",
+  "cash",
+  "cashflow",
+  "deal",
+  "deals",
+  "ecommerce",
+  "franchise",
+  "franchises",
+  "income",
+  "investing",
+  "investment",
+  "laundromat",
+  "operator",
+  "operators",
+  "real",
+  "estate",
+  "saas",
+  "service",
+  "services",
+  "small",
+  "storage",
+  "strategy",
+  "smb",
+  "vending",
+  "wealth",
+]);
+
+const OPPORTUNITY_STOP_WORDS = new Set([
+  "after",
+  "almost",
+  "around",
+  "because",
+  "best",
+  "being",
+  "between",
+  "could",
+  "does",
+  "every",
+  "from",
+  "have",
+  "into",
+  "just",
+  "most",
+  "nobody",
+  "over",
+  "people",
+  "really",
+  "should",
+  "still",
+  "than",
+  "that",
+  "their",
+  "there",
+  "these",
+  "they",
+  "this",
+  "those",
+  "under",
+  "what",
+  "when",
+  "where",
+  "which",
+  "while",
+  "with",
+  "would",
+]);
 
 type PersonaModelRow = {
   id: string;
@@ -362,6 +463,7 @@ const SCRIPT_PROJECT_SELECT = `
   sp.workspace_id,
   sp.channel_id,
   sp.persona_model_id,
+  sp.opportunity_json,
   sp.title,
   sp.topic,
   sp.status,
@@ -2055,6 +2157,7 @@ async function handleChannelRoute(
   }
 
   if (parts[3] === "hooks") return getHookLibrary(slug, url, context, env);
+  if (parts[3] === "opportunities") return getChannelOpportunities(slug, context, env);
   if (parts[3] === "videos") return getChannelVideos(slug, url, context, env);
   if (parts[3] === "topics") return getChannelTopics(slug, url, context, env);
   if (parts[3] === "trends") return getChannelTrends(slug, context, env);
@@ -2360,6 +2463,342 @@ async function getChannelTrends(
   return jsonResponse(response);
 }
 
+function getOpportunityPriorityBoost(tokens: string[]): number {
+  return tokens.reduce((sum, token) => {
+    if (OPPORTUNITY_PRIORITY_TOKENS.has(token)) return sum + 5;
+    return sum;
+  }, 0);
+}
+
+function buildOpportunityMetricLabel(views: number, videoCount?: number): string {
+  const base = `${Math.round(views).toLocaleString()} avg views`;
+  if (!videoCount) return base;
+  return `${base} across ${videoCount} videos`;
+}
+
+function findAnalyticsVideo(
+  analytics: ChannelAnalytics,
+  youtubeId: string | null | undefined
+): AnalyticsVideo | null {
+  if (!youtubeId) return null;
+  return analytics.videos.find((video) => video.youtubeId === youtubeId) ?? null;
+}
+
+function buildThumbnailDirection(video: AnalyticsVideo | null): string {
+  const analysis = video?.thumbnailAnalysis;
+  if (!analysis) {
+    return "Use one bold subject, a short 2-4 word claim, and high contrast so the idea reads instantly on mobile.";
+  }
+
+  const notes = [
+    analysis.primarySubject ? `Keep ${analysis.primarySubject} as the dominant subject.` : null,
+    analysis.textOverlayPresent
+      ? `Use ${analysis.textSize} ${analysis.textPosition} text, similar to the channel's winners.`
+      : "Favor short, punchy overlay text with a single dominant claim.",
+    analysis.expression ? `Match the ${analysis.expression} expression or reaction energy.` : null,
+    analysis.visualHook ? `Center the composition around ${analysis.visualHook}.` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return notes[0] ?? "Lead with a single visual argument and avoid clutter.";
+}
+
+function buildRepeatWinnerCandidate(
+  analytics: ChannelAnalytics,
+  cluster: ChannelAnalytics["topicClusters"][number]
+): OpportunityCandidate {
+  const exemplarVideo = findAnalyticsVideo(analytics, cluster.topVideoYoutubeId);
+  const topicTokens = tokenizeOpportunityText(cluster.topic);
+  const score = clampOpportunityScore(
+    58 +
+      Math.min(18, (cluster.averageViews / Math.max(analytics.averageViews, 1)) * 14) +
+      Math.min(10, cluster.videoCount * 2) +
+      Math.min(9, cluster.shareOfChannel * 100 * 0.35) +
+      getOpportunityPriorityBoost(topicTokens)
+  );
+
+  return {
+    id: `${analytics.channel.slug}-repeat-${slugifyValue(cluster.topic)}`,
+    opportunityType: "repeat_winner",
+    title: `Double down on ${cluster.topic}`,
+    topic: cluster.topic,
+    angle: `Take ${cluster.topic} out of generic listicle mode and frame it as a concrete operator play with one decisive business lesson.`,
+    rationale: `${analytics.channel.channel_name} already wins in this lane. The goal is not to repeat the same topic, but to narrow it into a sharper business-buying angle.`,
+    whyNow: `This is already proven on the channel, so it gives you the safest path to a new winner while still feeling fresh if the framing gets more specific.`,
+    recommendedHook: `${cluster.topic} looks crowded until you realize the real money is in the part almost nobody breaks down clearly.`,
+    recommendedFormat: "Evidence-led explainer with operator examples",
+    recommendedDuration: analytics.stats.bestDuration?.label ?? "12-18 min",
+    thumbnailDirection: buildThumbnailDirection(exemplarVideo),
+    score,
+    channelEvidence: [
+      {
+        title: "Existing win on your channel",
+        detail: cluster.topVideoTitle,
+        supportingMetric: `${cluster.topVideoViewCount.toLocaleString()} views`,
+        href: cluster.exemplarVideoUrl,
+      },
+      {
+        title: "Repeatable topic cluster",
+        detail: `${cluster.topic} is already a durable lane on the channel.`,
+        supportingMetric: buildOpportunityMetricLabel(cluster.averageViews, cluster.videoCount),
+        href: cluster.exemplarVideoUrl,
+      },
+      {
+        title: "Share of channel mix",
+        detail: `${Math.round(cluster.shareOfChannel * 100)}% of uploads already sit in this topic family.`,
+        supportingMetric: null,
+        href: null,
+      },
+    ],
+    competitorEvidence: [],
+    packageSeed: {
+      title: `The smartest ${cluster.topic.toLowerCase()} play in 2026`,
+      topic: cluster.topic,
+    },
+  };
+}
+
+function buildWhitespaceCandidate(
+  analytics: ChannelAnalytics,
+  gap: {
+    topic: string;
+    sourceChannel: string;
+    videoCount: number;
+    averageViews: number;
+    opportunityScore: number;
+    exemplarTitle: string;
+    exemplarYoutubeId: string;
+    exemplarVideoUrl: string;
+  }
+): OpportunityCandidate {
+  const topicTokens = tokenizeOpportunityText(gap.topic);
+  const score = clampOpportunityScore(
+    62 +
+      Math.min(16, gap.averageViews / Math.max(analytics.averageViews, 1) * 10) +
+      Math.min(10, gap.videoCount * 2) +
+      getOpportunityPriorityBoost(topicTokens)
+  );
+
+  return {
+    id: `${analytics.channel.slug}-whitespace-${slugifyValue(gap.topic)}`,
+    opportunityType: "adjacent_whitespace",
+    title: `Own ${gap.topic} with a business-buying angle`,
+    topic: gap.topic,
+    angle: `Borrow the curiosity already present around ${gap.topic}, but reinterpret it through ownership, cash flow, or strategic advantage instead of generic commentary.`,
+    rationale: `${gap.sourceChannel} is proving viewer appetite here, and ${analytics.channel.channel_name} has not clearly claimed this angle yet.`,
+    whyNow: `This is the fastest way to differentiate without leaving the audience's core interests. It feels new to your channel but already validated in the category.`,
+    recommendedHook: `Everybody is talking about ${gap.topic} like a headline. The better question is where the real business leverage is hiding.`,
+    recommendedFormat: "Johnny Harris-style narrative business explainer",
+    recommendedDuration: analytics.stats.bestDuration?.label ?? "12-18 min",
+    thumbnailDirection:
+      "Use one recognizable object from the story, a blunt 2-4 word claim, and a simple before-vs-after frame.",
+    score,
+    channelEvidence: [
+      {
+        title: "Fits your audience",
+        detail: `${analytics.channel.channel_name} already over-indexes on practical wealth and business education angles.`,
+        supportingMetric: `${analytics.averageViews.toLocaleString()} channel avg views`,
+        href: null,
+      },
+    ],
+    competitorEvidence: [
+      {
+        title: `${gap.sourceChannel} proves demand`,
+        detail: gap.exemplarTitle,
+        supportingMetric: buildOpportunityMetricLabel(gap.averageViews, gap.videoCount),
+        href: gap.exemplarVideoUrl,
+      },
+    ],
+    packageSeed: {
+      title: `The hidden business angle inside ${gap.topic}`,
+      topic: gap.topic,
+    },
+  };
+}
+
+function buildContrarianCandidate(
+  analytics: ChannelAnalytics,
+  anchorCluster: ChannelAnalytics["topicClusters"][number] | null,
+  topHook: HookSummary | null
+): OpportunityCandidate | null {
+  const cluster = anchorCluster;
+  if (!cluster?.topic) return null;
+  const topic = cluster.topic;
+
+  const score = clampOpportunityScore(
+    66 +
+      Math.min(12, (cluster.averageViews / Math.max(analytics.averageViews, 1)) * 8) +
+      getOpportunityPriorityBoost(tokenizeOpportunityText(topic))
+  );
+
+  const recommendedHook =
+    topHook?.hookType === "shock"
+      ? `The internet keeps romanticizing ${topic}. The real opportunity is much less obvious and a lot more profitable.`
+      : `Most people think ${topic} wins because it looks hot. It wins when it looks boring, messy, and hard to copy.`;
+
+  return {
+    id: `${analytics.channel.slug}-contrarian-${slugifyValue(topic)}`,
+    opportunityType: "contrarian_take",
+    title: `The contrarian ${topic.toLowerCase()} play nobody is modeling correctly`,
+    topic,
+    angle: `Position ${topic} as an asymmetric bet: less glamour, more operator edge. The story should challenge what ambitious viewers assume the best opportunities look like.`,
+    rationale: `Contrarian framing is part of the channel promise, but it works best when attached to a lane that is already validated on the channel.`,
+    whyNow: `This lets ${analytics.channel.channel_name} stay on-brand while sounding materially fresher than another standard “best businesses” roundup.`,
+    recommendedHook,
+    recommendedFormat: "Contrarian breakdown with hard proof points",
+    recommendedDuration: analytics.stats.bestDuration?.label ?? "12-18 min",
+    thumbnailDirection:
+      "Use one plain-looking business visual, a skeptical face or reaction, and a short line that implies the obvious answer is wrong.",
+    score,
+    channelEvidence: [
+      {
+        title: "Validated lane",
+        detail: cluster.topVideoTitle,
+        supportingMetric: `${cluster.topVideoViewCount.toLocaleString()} views`,
+        href: cluster.exemplarVideoUrl,
+      },
+      {
+        title: "Works with the brand",
+        detail: `${analytics.channel.channel_name} performs best when the angle feels useful, surprising, and slightly anti-consensus.`,
+        supportingMetric: null,
+        href: null,
+      },
+    ],
+    competitorEvidence: [],
+    packageSeed: {
+      title: `Why everyone is wrong about ${topic.toLowerCase()} in 2026`,
+      topic,
+    },
+  };
+}
+
+function dedupeOpportunityCandidates(candidates: OpportunityCandidate[]): OpportunityCandidate[] {
+  const seen = new Set<string>();
+  const items: OpportunityCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const key = `${candidate.opportunityType}:${slugifyValue(candidate.topic)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(candidate);
+  }
+
+  return items;
+}
+
+async function getChannelOpportunities(
+  slug: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const analytics = await getChannelAnalytics(slug, context, env);
+  if (!analytics) return jsonResponse({ error: "Channel not found" }, 404);
+
+  const [topHooks, workspaceChannels] = await Promise.all([
+    fetchHooks(analytics.channel.id, env, { limit: 6, sort: "views" }),
+    listWorkspaceChannelRows(context, env),
+  ]);
+
+  const repeatCandidates = [...analytics.topicClusters]
+    .sort((left, right) => {
+      const leftScore =
+        left.averageViews / Math.max(analytics.averageViews, 1) +
+        left.shareOfChannel +
+        left.videoCount * 0.08;
+      const rightScore =
+        right.averageViews / Math.max(analytics.averageViews, 1) +
+        right.shareOfChannel +
+        right.videoCount * 0.08;
+      return rightScore - leftScore;
+    })
+    .slice(0, 2)
+    .map((cluster) => buildRepeatWinnerCandidate(analytics, cluster));
+
+  const gapCandidates: OpportunityCandidate[] = [];
+  const competitorRows = workspaceChannels.filter((channel) => channel.slug !== slug);
+  const channelTopics = new Set(analytics.topicClusters.map((cluster) => cluster.topic.toLowerCase()));
+
+  for (const competitor of competitorRows) {
+    const competitorAnalytics = await getChannelAnalytics(competitor.slug, context, env);
+    if (!competitorAnalytics) continue;
+
+    const comparison = buildComparison(
+      {
+        slug: analytics.channel.slug,
+        channelName: analytics.channel.channel_name,
+        totalVideos: analytics.videos.length,
+        averageViews: analytics.averageViews,
+        medianViews: analytics.medianViews,
+        averageEngagementRate: analytics.averageEngagementRate,
+        uploadCadencePerWeek: analytics.stats.uploadCadencePerWeek.current,
+        bestDuration: analytics.stats.bestDuration,
+        topicClusters: analytics.topicClusters,
+      },
+      {
+        slug: competitorAnalytics.channel.slug,
+        channelName: competitorAnalytics.channel.channel_name,
+        totalVideos: competitorAnalytics.videos.length,
+        averageViews: competitorAnalytics.averageViews,
+        medianViews: competitorAnalytics.medianViews,
+        averageEngagementRate: competitorAnalytics.averageEngagementRate,
+        uploadCadencePerWeek: competitorAnalytics.stats.uploadCadencePerWeek.current,
+        bestDuration: competitorAnalytics.stats.bestDuration,
+        topicClusters: competitorAnalytics.topicClusters,
+      }
+    );
+
+    const usefulGaps = comparison.topicGaps.filter((gap) => {
+      if (gap.missingOn !== analytics.channel.slug) return false;
+      if (channelTopics.has(gap.topic.toLowerCase())) return false;
+      const tokens = tokenizeOpportunityText(gap.topic);
+      if (tokens.length === 0) return false;
+      return tokens.some((token) => OPPORTUNITY_PRIORITY_TOKENS.has(token));
+    });
+
+    gapCandidates.push(...usefulGaps.slice(0, 2).map((gap) => buildWhitespaceCandidate(analytics, gap)));
+  }
+
+  const contrarianCandidate = buildContrarianCandidate(
+    analytics,
+    analytics.topicClusters[0] ?? null,
+    topHooks[0] ?? null
+  );
+
+  const candidates = dedupeOpportunityCandidates(
+    [
+      ...repeatCandidates,
+      ...gapCandidates,
+      ...(contrarianCandidate ? [contrarianCandidate] : []),
+    ].sort((left, right) => right.score - left.score)
+  ).slice(0, 5);
+
+  const response: ChannelOpportunitiesResponse = {
+    channel: slug,
+    items: candidates.map((candidate) => ({
+      id: candidate.id,
+      channelSlug: slug,
+      opportunityType: candidate.opportunityType,
+      title: candidate.title,
+      topic: candidate.topic,
+      angle: candidate.angle,
+      rationale: candidate.rationale,
+      whyNow: candidate.whyNow,
+      recommendedHook: candidate.recommendedHook,
+      recommendedFormat: candidate.recommendedFormat,
+      recommendedDuration: candidate.recommendedDuration,
+      thumbnailDirection: candidate.thumbnailDirection,
+      score: candidate.score,
+      scoreLabel: getOpportunityScoreLabel(candidate.score),
+      channelEvidence: candidate.channelEvidence,
+      competitorEvidence: candidate.competitorEvidence,
+      packageSeed: candidate.packageSeed,
+    })),
+    count: candidates.length,
+    generatedAt: new Date().toISOString(),
+  };
+
+  return jsonResponse(response);
+}
+
 async function listScanJobs(context: RequestContext, env: Env): Promise<Response> {
   const { results = [] } = await env.DB.prepare(
     `SELECT ${SCAN_JOB_SELECT} FROM scan_jobs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 25`
@@ -2525,6 +2964,182 @@ function isScriptLabStep(rawValue: string): rawValue is ScriptLabStep {
   );
 }
 
+function slugifyValue(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+}
+
+function normalizeOpportunityToken(value: string): string | null {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!normalized || normalized.length < 3) return null;
+  if (OPPORTUNITY_STOP_WORDS.has(normalized)) return null;
+  return normalized;
+}
+
+function tokenizeOpportunityText(value: string): string[] {
+  const tokens = value
+    .split(/[^a-zA-Z0-9]+/)
+    .map(normalizeOpportunityToken)
+    .filter((token): token is string => Boolean(token));
+  return [...new Set(tokens)];
+}
+
+function clampOpportunityScore(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function getOpportunityScoreLabel(score: number): string {
+  if (score >= 88) return "Best next bet";
+  if (score >= 78) return "High-confidence angle";
+  if (score >= 68) return "Worth testing";
+  return "Exploratory";
+}
+
+function normalizeOpportunityEvidence(
+  rawValue: unknown
+): ChannelOpportunityEvidence | null {
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return null;
+  }
+
+  const value = rawValue as Record<string, unknown>;
+  const title = typeof value.title === "string" ? value.title.trim() : "";
+  const detail = typeof value.detail === "string" ? value.detail.trim() : "";
+  if (!title || !detail) return null;
+
+  return {
+    title,
+    detail,
+    supportingMetric:
+      typeof value.supportingMetric === "string" && value.supportingMetric.trim()
+        ? value.supportingMetric.trim()
+        : null,
+    href: typeof value.href === "string" && value.href.trim() ? value.href.trim() : null,
+  };
+}
+
+function normalizeOpportunityPayload(
+  rawValue: unknown,
+  fallbackChannelSlug: string | null
+): ChannelOpportunity | null {
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return null;
+  }
+
+  const value = rawValue as Record<string, unknown>;
+  const topic = typeof value.topic === "string" ? value.topic.trim() : "";
+  const title = typeof value.title === "string" ? value.title.trim() : "";
+  const angle = typeof value.angle === "string" ? value.angle.trim() : "";
+  const rationale = typeof value.rationale === "string" ? value.rationale.trim() : "";
+  const whyNow = typeof value.whyNow === "string" ? value.whyNow.trim() : "";
+  const recommendedHook =
+    typeof value.recommendedHook === "string" ? value.recommendedHook.trim() : "";
+  const recommendedFormat =
+    typeof value.recommendedFormat === "string" ? value.recommendedFormat.trim() : "";
+  const recommendedDuration =
+    typeof value.recommendedDuration === "string" ? value.recommendedDuration.trim() : "";
+  const thumbnailDirection =
+    typeof value.thumbnailDirection === "string" ? value.thumbnailDirection.trim() : "";
+  const rawType =
+    value.opportunityType === "adjacent_whitespace" ||
+    value.opportunityType === "contrarian_take" ||
+    value.opportunityType === "repeat_winner"
+      ? value.opportunityType
+      : "repeat_winner";
+  const channelSlug =
+    typeof value.channelSlug === "string" && value.channelSlug.trim()
+      ? value.channelSlug.trim()
+      : fallbackChannelSlug;
+
+  if (
+    !channelSlug ||
+    !topic ||
+    !title ||
+    !angle ||
+    !rationale ||
+    !whyNow ||
+    !recommendedHook ||
+    !recommendedFormat ||
+    !recommendedDuration ||
+    !thumbnailDirection
+  ) {
+    return null;
+  }
+
+  const score =
+    typeof value.score === "number" && Number.isFinite(value.score)
+      ? clampOpportunityScore(value.score)
+      : 72;
+
+  const rawPackageSeed =
+    value.packageSeed && typeof value.packageSeed === "object" && !Array.isArray(value.packageSeed)
+      ? (value.packageSeed as Record<string, unknown>)
+      : {};
+
+  const packageTitle =
+    typeof rawPackageSeed.title === "string" && rawPackageSeed.title.trim()
+      ? rawPackageSeed.title.trim()
+      : title;
+  const packageTopic =
+    typeof rawPackageSeed.topic === "string" && rawPackageSeed.topic.trim()
+      ? rawPackageSeed.topic.trim()
+      : topic;
+
+  const channelEvidence = Array.isArray(value.channelEvidence)
+    ? value.channelEvidence
+        .map(normalizeOpportunityEvidence)
+        .filter((item): item is ChannelOpportunityEvidence => Boolean(item))
+    : [];
+  const competitorEvidence = Array.isArray(value.competitorEvidence)
+    ? value.competitorEvidence
+        .map(normalizeOpportunityEvidence)
+        .filter((item): item is ChannelOpportunityEvidence => Boolean(item))
+    : [];
+
+  return {
+    id:
+      typeof value.id === "string" && value.id.trim()
+        ? value.id.trim()
+        : `${channelSlug}-${rawType}-${slugifyValue(topic)}`,
+    channelSlug,
+    opportunityType: rawType,
+    title,
+    topic,
+    angle,
+    rationale,
+    whyNow,
+    recommendedHook,
+    recommendedFormat,
+    recommendedDuration,
+    thumbnailDirection,
+    score,
+    scoreLabel:
+      typeof value.scoreLabel === "string" && value.scoreLabel.trim()
+        ? value.scoreLabel.trim()
+        : getOpportunityScoreLabel(score),
+    channelEvidence,
+    competitorEvidence,
+    packageSeed: {
+      title: packageTitle,
+      topic: packageTopic,
+    },
+  };
+}
+
+function parseChannelOpportunity(rawValue: string | null | undefined): ChannelOpportunity | null {
+  if (!rawValue) return null;
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    return normalizeOpportunityPayload(parsed, null);
+  } catch {
+    return null;
+  }
+}
+
 function toScriptProjectSummary(row: ScriptProjectRow): ScriptProjectSummary {
   return {
     id: row.id,
@@ -2543,6 +3158,7 @@ function toScriptProjectSummary(row: ScriptProjectRow): ScriptProjectSummary {
       row.latest_output_version === null || row.latest_output_version === undefined
         ? null
         : Number(row.latest_output_version),
+    opportunity: parseChannelOpportunity(row.opportunity_json),
   };
 }
 
@@ -2932,6 +3548,7 @@ async function createScriptProject(
     String(payload?.channelSlug ?? payload?.channel ?? env.DEFAULT_CHANNEL_SLUG ?? "").trim() || null;
   const requestedPersonaModelId =
     String(payload?.personaModelId ?? "").trim() || null;
+  const opportunity = normalizeOpportunityPayload(payload?.opportunity, channelSlug);
 
   if (!topic) {
     return jsonResponse({ error: "topic is required" }, 400);
@@ -2967,13 +3584,14 @@ async function createScriptProject(
         workspace_id,
         channel_id,
         persona_model_id,
+        opportunity_json,
         title,
         topic,
         status,
         created_by_user_id,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
   )
     .bind(
@@ -2981,6 +3599,7 @@ async function createScriptProject(
       context.workspace.id,
       channel?.id ?? null,
       personaModel?.id ?? null,
+      opportunity ? JSON.stringify(opportunity) : null,
       title,
       topic,
       requestedStatus,
@@ -3078,6 +3697,16 @@ async function updateScriptProject(
     }
   }
 
+  if (payload.opportunity !== undefined) {
+    const selectedChannelSlug =
+      payload.channelSlug !== undefined || payload.channel !== undefined
+        ? String(payload.channelSlug ?? payload.channel ?? "").trim() || null
+        : existing.channel_slug;
+    const opportunity = normalizeOpportunityPayload(payload.opportunity, selectedChannelSlug);
+    assignments.push("opportunity_json = ?");
+    binds.push(opportunity ? JSON.stringify(opportunity) : null);
+  }
+
   binds.push(projectId, context.workspace.id);
 
   await env.DB.prepare(
@@ -3101,6 +3730,7 @@ async function rebuildScriptResearch(
 
   const analytics = await getChannelAnalytics(project.channel_slug, context, env);
   if (!analytics) return [];
+  const selectedOpportunity = parseChannelOpportunity(project.opportunity_json);
 
   const searchFilters: SearchFilters = {
     channelSlug: project.channel_slug,
@@ -3193,6 +3823,28 @@ async function rebuildScriptResearch(
     sourceYoutubeId: string | null;
     title: string | null;
   }> = [
+    ...(selectedOpportunity
+      ? [
+          {
+            excerpt: `${selectedOpportunity.angle} ${selectedOpportunity.whyNow}`.trim(),
+            itemType: "opportunity_brief",
+            metadata: {
+              opportunityId: selectedOpportunity.id,
+              opportunityType: selectedOpportunity.opportunityType,
+              rationale: selectedOpportunity.rationale,
+              recommendedDuration: selectedOpportunity.recommendedDuration,
+              recommendedFormat: selectedOpportunity.recommendedFormat,
+              recommendedHook: selectedOpportunity.recommendedHook,
+              thumbnailDirection: selectedOpportunity.thumbnailDirection,
+            },
+            score: selectedOpportunity.score,
+            sourceChannelSlug: selectedOpportunity.channelSlug,
+            sourceVectorId: null,
+            sourceYoutubeId: null,
+            title: selectedOpportunity.title,
+          },
+        ]
+      : []),
     ...quoteItems.map((item) => ({
       excerpt: item.snippet,
       itemType: "quote",
@@ -3366,6 +4018,7 @@ async function generateScriptProjectOutput(
   const selectedPersonaModel = project.persona_model_id
     ? await findPersonaModelRow(project.persona_model_id, context, env)
     : null;
+  const selectedOpportunity = parseChannelOpportunity(project.opportunity_json);
 
   const ensuredResearch =
     researchItems.length > 0 ? researchItems : await rebuildScriptResearch(project, context, env);
@@ -3373,6 +4026,7 @@ async function generateScriptProjectOutput(
     channelName: analytics.channel.channel_name,
     channelSlug: analytics.channel.slug,
     existingOutputs: outputs,
+    opportunity: selectedOpportunity,
     projectTitle: project.title,
     researchItems: ensuredResearch,
     topic: project.topic,

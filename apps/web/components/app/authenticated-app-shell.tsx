@@ -56,8 +56,16 @@ const LAST_CHANNEL_SLUG_KEY = "ytscan:last-channel-slug";
 
 const sidebarItems: SidebarItem[] = [
   {
-    key: "dashboard",
-    label: "Dashboard",
+    key: "opportunities",
+    label: "Opportunities",
+    icon: Sparkles,
+    href: (channelSlug) =>
+      channelSlug ? `/app/channels/${channelSlug}/opportunities` : "/app/channels",
+    active: (pathname) => pathname.includes("/opportunities"),
+  },
+  {
+    key: "analytics",
+    label: "Analytics",
     icon: LayoutGrid,
     href: (channelSlug) => (channelSlug ? `/app/channels/${channelSlug}` : "/app/channels"),
     active: (pathname) =>
@@ -74,7 +82,7 @@ const sidebarItems: SidebarItem[] = [
   {
     key: "script-lab",
     label: "Script Lab",
-    icon: Sparkles,
+    icon: FolderKanban,
     href: (channelSlug) =>
       channelSlug ? `/app/channels/${channelSlug}/script-lab/projects` : "/app/channels",
     active: (pathname) => pathname.includes("/script-lab"),
@@ -192,7 +200,7 @@ function WorkspaceChannelSwitcher({
         {channels.length ? (
           channels.map((channel) => (
             <DropdownMenuItem asChild key={channel.slug} className="rounded-[10px] px-3 py-2.5">
-              <Link href={`/app/channels/${channel.slug}`} className="flex items-center gap-3">
+              <Link href={`/app/channels/${channel.slug}/opportunities`} className="flex items-center gap-3">
                 <ChannelAvatar channelName={channel.channelName} channelSlug={channel.slug} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-medium text-foreground">

@@ -214,6 +214,43 @@ export type ChannelCompareResponse = {
   topicOverlap: CompareTopicOverlap[];
 };
 
+export type ChannelOpportunityEvidence = {
+  title: string;
+  detail: string;
+  supportingMetric: string | null;
+  href: string | null;
+};
+
+export type ChannelOpportunity = {
+  id: string;
+  channelSlug: string;
+  opportunityType: "repeat_winner" | "adjacent_whitespace" | "contrarian_take";
+  title: string;
+  topic: string;
+  angle: string;
+  rationale: string;
+  whyNow: string;
+  recommendedHook: string;
+  recommendedFormat: string;
+  recommendedDuration: string;
+  thumbnailDirection: string;
+  score: number;
+  scoreLabel: string;
+  channelEvidence: ChannelOpportunityEvidence[];
+  competitorEvidence: ChannelOpportunityEvidence[];
+  packageSeed: {
+    title: string;
+    topic: string;
+  };
+};
+
+export type ChannelOpportunitiesResponse = {
+  channel: string;
+  items: ChannelOpportunity[];
+  count: number;
+  generatedAt: string;
+};
+
 export type ScanJob = {
   jobId: string;
   channelUrl: string;
@@ -341,6 +378,7 @@ export type ScriptProjectSummary = {
   researchItemCount: number;
   latestOutputStep: string | null;
   latestOutputVersion: number | null;
+  opportunity: ChannelOpportunity | null;
 };
 
 export type ScriptProjectDetail = ScriptProjectSummary & {

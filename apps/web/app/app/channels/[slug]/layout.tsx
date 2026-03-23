@@ -37,7 +37,7 @@ export default function ChannelLayout({ children }: ChannelLayoutProps) {
           <span>/</span>
           {isHookRoute ? (
             <>
-              <span>Dashboard</span>
+              <span>Analytics</span>
               <span>/</span>
               <span className="font-medium text-foreground">Hook Library</span>
             </>

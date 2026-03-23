@@ -36,6 +36,12 @@ const outputStepLabels: Record<ScriptLabViewStep, string> = {
   previs: "Previsualization",
 };
 
+const opportunityTypeLabels = {
+  repeat_winner: "Repeat winner",
+  adjacent_whitespace: "Whitespace",
+  contrarian_take: "Contrarian take",
+} as const;
+
 const sceneStepNames = ["Hook", "Setup", "Point 1", "Point 2", "Point 3 + CTA"];
 
 function isViewStep(value: string | null): value is ScriptLabViewStep {
@@ -279,6 +285,75 @@ function StepOutputBody({
   );
 }
 
+function OpportunitySummaryPanel({ project }: { project: ScriptProjectDetail }) {
+  if (!project.opportunity) return null;
+
+  const opportunity = project.opportunity;
+  const channelProof = opportunity.channelEvidence[0] ?? null;
+  const competitorProof = opportunity.competitorEvidence[0] ?? null;
+
+  return (
+    <AppPanel className="grid gap-4 px-5 py-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-primary px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-primary-foreground">
+          {opportunity.scoreLabel}
+        </span>
+        <span className="rounded-full bg-secondary px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          {opportunityTypeLabels[opportunity.opportunityType]}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
+          Selected Opportunity
+        </h2>
+        <p className="text-[17px] font-medium leading-7 text-foreground">{opportunity.title}</p>
+        <p className="text-[14px] leading-6 text-muted-foreground">{opportunity.angle}</p>
+      </div>
+
+      <div className="grid gap-3 text-sm text-muted-foreground">
+        <div>
+          <p className="font-medium uppercase tracking-[0.06em] text-muted-foreground">Why now</p>
+          <p className="mt-1 leading-6 text-foreground">{opportunity.whyNow}</p>
+        </div>
+
+        {channelProof ? (
+          <div>
+            <p className="font-medium uppercase tracking-[0.06em] text-muted-foreground">
+              Channel proof
+            </p>
+            <p className="mt-1 leading-6 text-foreground">
+              {channelProof.title}
+              {channelProof.supportingMetric ? ` · ${channelProof.supportingMetric}` : ""}
+            </p>
+            <p className="leading-6">{channelProof.detail}</p>
+          </div>
+        ) : null}
+
+        {competitorProof ? (
+          <div>
+            <p className="font-medium uppercase tracking-[0.06em] text-muted-foreground">
+              Competitor proof
+            </p>
+            <p className="mt-1 leading-6 text-foreground">
+              {competitorProof.title}
+              {competitorProof.supportingMetric ? ` · ${competitorProof.supportingMetric}` : ""}
+            </p>
+            <p className="leading-6">{competitorProof.detail}</p>
+          </div>
+        ) : null}
+
+        <div>
+          <p className="font-medium uppercase tracking-[0.06em] text-muted-foreground">
+            Thumbnail direction
+          </p>
+          <p className="mt-1 leading-6 text-foreground">{opportunity.thumbnailDirection}</p>
+        </div>
+      </div>
+    </AppPanel>
+  );
+}
+
 function GenericStepLayout({
   slug,
   project,
@@ -351,6 +426,14 @@ function GenericStepLayout({
               This project is ready for research and generation. Use the workflow on the left to
               move through hooks, scripts, notes, thumbnails, and previs.
             </p>
+            {project.opportunity ? (
+              <div className="rounded-[12px] border border-border bg-secondary/70 px-4 py-4 text-[14px] leading-7 text-muted-foreground">
+                <p className="font-medium text-foreground">Seeded from a ranked opportunity</p>
+                <p className="mt-1">
+                  {project.opportunity.title} — {project.opportunity.angle}
+                </p>
+              </div>
+            ) : null}
           </AppPanel>
         ) : null}
 
@@ -424,6 +507,8 @@ function GenericStepLayout({
             </p>
           </div>
         </AppPanel>
+
+        <OpportunitySummaryPanel project={project} />
 
         <AppPanel className="grid gap-3 px-5 py-5">
           <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
