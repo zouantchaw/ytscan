@@ -52,7 +52,11 @@ import {
   terminateLambdaInstances,
 } from "./lambda";
 import { buildMeResponse, getRequestContext, type RequestContext } from "./request-context";
-import { buildPersonaDatasetLines, generateScriptLabStep } from "./script-lab";
+import {
+  buildPersonaDatasetLines,
+  generateScriptLabStep,
+  type ScriptLabGenerationContext,
+} from "./script-lab";
 
 type ChannelRow = {
   id: number;
@@ -267,7 +271,6 @@ const OPPORTUNITY_PRIORITY_TOKENS = new Set([
   "laundromat",
   "operator",
   "operators",
-  "real",
   "estate",
   "saas",
   "service",
@@ -276,6 +279,39 @@ const OPPORTUNITY_PRIORITY_TOKENS = new Set([
   "storage",
   "strategy",
   "smb",
+  "vending",
+  "wealth",
+]);
+
+const OPPORTUNITY_BUSINESS_TOKENS = new Set([
+  "acquisition",
+  "asset",
+  "assets",
+  "boring",
+  "business",
+  "businesses",
+  "buy",
+  "buying",
+  "cash",
+  "cashflow",
+  "deal",
+  "deals",
+  "ecommerce",
+  "estate",
+  "franchise",
+  "franchises",
+  "income",
+  "investing",
+  "investment",
+  "laundromat",
+  "operator",
+  "operators",
+  "saas",
+  "service",
+  "services",
+  "small",
+  "smb",
+  "storage",
   "vending",
   "wealth",
 ]);
@@ -318,6 +354,15 @@ const OPPORTUNITY_STOP_WORDS = new Set([
   "while",
   "with",
   "would",
+]);
+
+const DEFAULT_SCRIPT_LAB_TEXT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const AI_SCRIPT_LAB_STEPS = new Set<ScriptLabStep>([
+  "hooks",
+  "outline",
+  "script",
+  "director_notes",
+  "thumbnail_brief",
 ]);
 
 type PersonaModelRow = {
@@ -772,6 +817,72 @@ function extractEmbedding(response: unknown): number[] | null {
     const first = payload.result.data[0];
     if (Array.isArray(first)) return first;
     if (Array.isArray(first?.embedding)) return first.embedding;
+  }
+
+  return null;
+}
+
+function extractAiTextResponse(response: unknown): string | null {
+  const payload: any = response;
+
+  if (typeof payload === "string" && payload.trim().length > 0) {
+    return payload.trim();
+  }
+
+  if (typeof payload?.response === "string" && payload.response.trim().length > 0) {
+    return payload.response.trim();
+  }
+
+  if (typeof payload?.result?.response === "string" && payload.result.response.trim().length > 0) {
+    return payload.result.response.trim();
+  }
+
+  if (Array.isArray(payload?.result) && payload.result.length > 0) {
+    const combined = payload.result
+      .map((item: any) => {
+        if (typeof item === "string") return item;
+        if (typeof item?.text === "string") return item.text;
+        if (Array.isArray(item?.content)) {
+          return item.content
+            .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+            .join("");
+        }
+        return "";
+      })
+      .join("")
+      .trim();
+
+    if (combined) return combined;
+  }
+
+  if (Array.isArray(payload?.output) && payload.output.length > 0) {
+    const combined = payload.output
+      .map((item: any) => {
+        if (typeof item === "string") return item;
+        if (typeof item?.text === "string") return item.text;
+        if (Array.isArray(item?.content)) {
+          return item.content
+            .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+            .join("");
+        }
+        return "";
+      })
+      .join("")
+      .trim();
+
+    if (combined) return combined;
+  }
+
+  const choiceContent = payload?.choices?.[0]?.message?.content;
+  if (typeof choiceContent === "string" && choiceContent.trim().length > 0) {
+    return choiceContent.trim();
+  }
+  if (Array.isArray(choiceContent)) {
+    const combined = choiceContent
+      .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+      .join("")
+      .trim();
+    if (combined) return combined;
   }
 
   return null;
@@ -2470,6 +2581,17 @@ function getOpportunityPriorityBoost(tokens: string[]): number {
   }, 0);
 }
 
+function getOpportunityBusinessFitScore(tokens: string[]): number {
+  return tokens.reduce((sum, token) => {
+    if (OPPORTUNITY_BUSINESS_TOKENS.has(token)) return sum + 1;
+    return sum;
+  }, 0);
+}
+
+function isBusinessAdjacentOpportunity(tokens: string[]): boolean {
+  return getOpportunityBusinessFitScore(tokens) > 0;
+}
+
 function buildOpportunityMetricLabel(views: number, videoCount?: number): string {
   const base = `${Math.round(views).toLocaleString()} avg views`;
   if (!videoCount) return base;
@@ -2571,11 +2693,13 @@ function buildWhitespaceCandidate(
   }
 ): OpportunityCandidate {
   const topicTokens = tokenizeOpportunityText(gap.topic);
+  const businessFit = getOpportunityBusinessFitScore(topicTokens);
   const score = clampOpportunityScore(
     62 +
       Math.min(16, gap.averageViews / Math.max(analytics.averageViews, 1) * 10) +
       Math.min(10, gap.videoCount * 2) +
-      getOpportunityPriorityBoost(topicTokens)
+      getOpportunityPriorityBoost(topicTokens) +
+      businessFit * 4
   );
 
   return {
@@ -2751,7 +2875,7 @@ async function getChannelOpportunities(
       if (channelTopics.has(gap.topic.toLowerCase())) return false;
       const tokens = tokenizeOpportunityText(gap.topic);
       if (tokens.length === 0) return false;
-      return tokens.some((token) => OPPORTUNITY_PRIORITY_TOKENS.has(token));
+      return isBusinessAdjacentOpportunity(tokens);
     });
 
     gapCandidates.push(...usefulGaps.slice(0, 2).map((gap) => buildWhitespaceCandidate(analytics, gap)));
@@ -2985,6 +3109,140 @@ function tokenizeOpportunityText(value: string): string[] {
     .map(normalizeOpportunityToken)
     .filter((token): token is string => Boolean(token));
   return [...new Set(tokens)];
+}
+
+function buildOpportunityResearchQuery(
+  projectTopic: string,
+  opportunity: ChannelOpportunity | null
+): string {
+  if (!opportunity) return projectTopic;
+  return [opportunity.topic, opportunity.angle, opportunity.whyNow].filter(Boolean).join(". ");
+}
+
+function buildOpportunityResearchTokens(
+  projectTopic: string,
+  opportunity: ChannelOpportunity | null
+): string[] {
+  return tokenizeOpportunityText(
+    [
+      projectTopic,
+      opportunity?.title ?? "",
+      opportunity?.topic ?? "",
+      opportunity?.angle ?? "",
+      opportunity?.recommendedHook ?? "",
+      opportunity?.rationale ?? "",
+      opportunity?.whyNow ?? "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+function scoreOpportunityTextOverlap(value: string, tokens: string[]): number {
+  if (!value || tokens.length === 0) return 0;
+  const haystackTokens = new Set(tokenizeOpportunityText(value));
+  let matches = 0;
+
+  for (const token of tokens) {
+    if (haystackTokens.has(token)) matches += 1;
+  }
+
+  return matches;
+}
+
+function selectOpportunityQuoteItems(
+  semanticMatches: SearchResultItem[] | null,
+  textMatches: SearchResultItem[],
+  tokens: string[],
+  limit: number
+): SearchResultItem[] {
+  const merged = new Map<
+    string,
+    {
+      overlapScore: number;
+      semanticScore: number;
+      viewCount: number;
+      item: SearchResultItem;
+    }
+  >();
+
+  for (const item of [...(semanticMatches ?? []), ...textMatches]) {
+    const key = item.vectorId || `${item.youtubeId}:${item.startTime}:${item.channelSlug}`;
+    const overlapScore = scoreOpportunityTextOverlap(`${item.title} ${item.snippet}`, tokens);
+    const semanticScore = item.score ?? 0;
+    const existing = merged.get(key);
+
+    if (
+      !existing ||
+      overlapScore > existing.overlapScore ||
+      (overlapScore === existing.overlapScore && semanticScore > existing.semanticScore)
+    ) {
+      merged.set(key, {
+        overlapScore,
+        semanticScore,
+        viewCount: item.viewCount,
+        item,
+      });
+    }
+  }
+
+  const ranked = [...merged.values()]
+    .sort((left, right) => {
+      if (right.overlapScore !== left.overlapScore) return right.overlapScore - left.overlapScore;
+      if (right.semanticScore !== left.semanticScore) return right.semanticScore - left.semanticScore;
+      return right.viewCount - left.viewCount;
+    })
+    .map((entry) => entry.item);
+
+  const relevant = ranked.filter((item) =>
+    scoreOpportunityTextOverlap(`${item.title} ${item.snippet}`, tokens) > 0
+  );
+
+  return (relevant.length > 0 ? relevant : ranked).slice(0, limit);
+}
+
+function selectRelevantHooksForOpportunity(
+  hooks: HookSummary[],
+  tokens: string[],
+  limit: number
+): HookSummary[] {
+  const ranked = [...hooks].sort((left, right) => {
+    const leftOverlap = scoreOpportunityTextOverlap(`${left.videoTitle} ${left.text}`, tokens);
+    const rightOverlap = scoreOpportunityTextOverlap(`${right.videoTitle} ${right.text}`, tokens);
+    if (rightOverlap !== leftOverlap) return rightOverlap - leftOverlap;
+    return right.viewCount - left.viewCount;
+  });
+
+  const relevant = ranked.filter(
+    (hook) => scoreOpportunityTextOverlap(`${hook.videoTitle} ${hook.text}`, tokens) > 0
+  );
+
+  return (relevant.length > 0 ? relevant : ranked).slice(0, limit);
+}
+
+function selectRelevantTopicClustersForOpportunity(
+  topicClusters: ChannelAnalytics["topicClusters"],
+  tokens: string[],
+  limit: number
+) {
+  const ranked = [...topicClusters].sort((left, right) => {
+    const leftOverlap = scoreOpportunityTextOverlap(
+      `${left.topic} ${left.topVideoTitle}`,
+      tokens
+    );
+    const rightOverlap = scoreOpportunityTextOverlap(
+      `${right.topic} ${right.topVideoTitle}`,
+      tokens
+    );
+    if (rightOverlap !== leftOverlap) return rightOverlap - leftOverlap;
+    return right.averageViews - left.averageViews;
+  });
+
+  const relevant = ranked.filter(
+    (topic) => scoreOpportunityTextOverlap(`${topic.topic} ${topic.topVideoTitle}`, tokens) > 0
+  );
+
+  return (relevant.length > 0 ? relevant : ranked).slice(0, limit);
 }
 
 function clampOpportunityScore(value: number): number {
@@ -3322,6 +3580,200 @@ function buildFallbackPersonaSamples(topHooks: HookSummary[]): PersonaStyleSampl
     content: buildSnippet(hook.text, 180),
     source: "channel-corpus",
   }));
+}
+
+type ScriptLabAiGenerationResult = {
+  content: string;
+  metadata: JsonObject;
+  modelKey: string;
+};
+
+function buildScriptLabResearchDigest(researchItems: ScriptResearchItem[]): string {
+  return researchItems
+    .slice(0, 8)
+    .map((item, index) => {
+      const title = item.title ? `${item.title}: ` : "";
+      const excerpt = item.excerpt ? buildSnippet(item.excerpt, 220) : "";
+      const score = typeof item.score === "number" ? ` [score ${Math.round(item.score)}]` : "";
+      return `${index + 1}. [${item.itemType}] ${title}${excerpt}${score}`.trim();
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildScriptLabPreviousOutputDigest(
+  existingOutputs: Array<{ content: string; step: string; version: number }>,
+  activeStep: ScriptLabStep
+): string {
+  const relevantSteps = new Set<ScriptLabStep | string>();
+
+  if (activeStep === "outline") {
+    relevantSteps.add("hooks");
+  } else if (activeStep === "script") {
+    relevantSteps.add("hooks");
+    relevantSteps.add("outline");
+  } else if (activeStep === "director_notes") {
+    relevantSteps.add("hooks");
+    relevantSteps.add("outline");
+    relevantSteps.add("script");
+  } else if (activeStep === "thumbnail_brief") {
+    relevantSteps.add("hooks");
+    relevantSteps.add("script");
+  }
+
+  return existingOutputs
+    .filter((output) => relevantSteps.has(output.step))
+    .sort((left, right) => left.step.localeCompare(right.step) || right.version - left.version)
+    .slice(0, 3)
+    .map((output) => `## ${output.step}\n${buildSnippet(output.content, 700)}`)
+    .join("\n\n");
+}
+
+function getScriptLabAiRequirements(step: ScriptLabStep, channelName: string): string {
+  switch (step) {
+    case "hooks":
+      return [
+        "- Produce exactly 3 hook options.",
+        "- Each hook should feel like a real YouTube opener for a contrarian business/wealth channel.",
+        "- After the hooks, include a short section explaining why the winner should work and which proof point lands first.",
+        `- Keep the voice direct, operator-first, and sharp for ${channelName}.`,
+      ].join("\n");
+    case "outline":
+      return [
+        "- Build a concise 6-part outline.",
+        "- Make the proof stack specific; avoid generic filler sections.",
+        "- The outline should create momentum toward a clear business lesson.",
+      ].join("\n");
+    case "script":
+      return [
+        "- Write only the first 60-90 seconds.",
+        "- Make it sound like a strong YouTube cold open, not an essay.",
+        "- Use specific proof from the evidence set early.",
+        "- Avoid generic motivational phrasing, broad platitudes, or template filler.",
+      ].join("\n");
+    case "director_notes":
+      return [
+        "- Write shot-by-shot notes for the opening minute.",
+        "- Include pacing, cut style, text overlays, and what visual proof appears when.",
+        "- Keep it practical enough that an editor or producer could use it immediately.",
+      ].join("\n");
+    case "thumbnail_brief":
+      return [
+        "- Produce exactly 2 thumbnail concepts.",
+        "- Each concept must include headline text (max 4 words), subject/framing, and why it should win.",
+        "- Use previous channel winners as style references, not as copies.",
+      ].join("\n");
+    default:
+      return "- Return a production-ready markdown deliverable.";
+  }
+}
+
+function stripMarkdownCodeFences(value: string): string {
+  return value
+    .replace(/^```[a-zA-Z0-9_-]*\s*/u, "")
+    .replace(/\s*```$/u, "")
+    .trim();
+}
+
+async function maybeGenerateScriptLabStepWithAi(
+  step: ScriptLabStep,
+  context: ScriptLabGenerationContext,
+  researchItems: ScriptResearchItem[],
+  selectedPersonaModel: PersonaModelRow | null,
+  topHooks: HookSummary[],
+  env: Env
+): Promise<ScriptLabAiGenerationResult | null> {
+  if (!env.AI || !AI_SCRIPT_LAB_STEPS.has(step)) return null;
+
+  const model = env.SCRIPT_LAB_TEXT_MODEL?.trim() || DEFAULT_SCRIPT_LAB_TEXT_MODEL;
+  const fallback = generateScriptLabStep(step, context);
+  const extractedPersonaSamples = readPersonaStyleSamples(selectedPersonaModel);
+  const personaSamples =
+    extractedPersonaSamples.length > 0
+      ? extractedPersonaSamples
+      : selectedPersonaModel
+        ? buildFallbackPersonaSamples(topHooks)
+        : [];
+
+  const personaDigest = personaSamples
+    .slice(0, 3)
+    .map(
+      (sample, index) =>
+        `${index + 1}. ${sample.prompt} — ${buildSnippet(sample.content, 180)}`
+    )
+    .join("\n");
+  const opportunityDigest = context.opportunity
+    ? [
+        `Selected opportunity: ${context.opportunity.title}`,
+        `Topic: ${context.opportunity.topic}`,
+        `Angle: ${context.opportunity.angle}`,
+        `Why now: ${context.opportunity.whyNow}`,
+        `Recommended hook: ${context.opportunity.recommendedHook}`,
+      ].join("\n")
+    : `Topic: ${context.topic}`;
+  const researchDigest = buildScriptLabResearchDigest(researchItems);
+  const previousOutputDigest = buildScriptLabPreviousOutputDigest(context.existingOutputs, step);
+
+  const systemPrompt = [
+    "You are a senior YouTube strategist and scriptwriter for business, wealth, and business-buying content.",
+    "Your job is to turn channel evidence into a specific, publishable deliverable.",
+    "Be concrete, opinionated, and useful.",
+    "Avoid generic filler, vague hype, or obvious AI phrasing.",
+    "Return markdown only with no code fences and no preamble.",
+  ].join(" ");
+
+  const userPrompt = [
+    `Create the ${step} deliverable for "${context.projectTitle}".`,
+    opportunityDigest,
+    researchDigest ? `Evidence set:\n${researchDigest}` : "",
+    personaDigest
+      ? `Voice references from the trained persona or channel corpus:\n${personaDigest}`
+      : "",
+    previousOutputDigest ? `Existing approved context:\n${previousOutputDigest}` : "",
+    `Requirements:\n${getScriptLabAiRequirements(step, context.channelName)}`,
+    "Use the scaffold below only as a baseline to improve substantially. Keep the same general structure if it helps, but make the output sharper and more specific.",
+    fallback.content.slice(0, 3200),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  try {
+    const runScriptLabModel = env.AI.run as (
+      modelName: string,
+      inputs: Record<string, unknown>,
+    ) => Promise<unknown>;
+
+    const response = await runScriptLabModel(model, {
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: step === "script" ? 1400 : 900,
+      temperature: step === "hooks" ? 0.85 : 0.45,
+    });
+    const content = extractAiTextResponse(response);
+    if (!content) return null;
+
+    return {
+      content: stripMarkdownCodeFences(content),
+      metadata: {
+        source: "workers-ai",
+        fallbackSource: fallback.metadata.source ?? "template",
+        model,
+        personaModelId: selectedPersonaModel?.id ?? null,
+        personaSampleCount: personaSamples.length,
+        opportunityId: context.opportunity?.id ?? null,
+      },
+      modelKey: `workers-ai:${model}`,
+    };
+  } catch (error) {
+    console.error("workers-ai-script-lab-fallback", {
+      error: error instanceof Error ? error.message : String(error),
+      model,
+      step,
+    });
+    return null;
+  }
 }
 
 async function validatePersonaModelSelection(
@@ -3731,6 +4183,8 @@ async function rebuildScriptResearch(
   const analytics = await getChannelAnalytics(project.channel_slug, context, env);
   if (!analytics) return [];
   const selectedOpportunity = parseChannelOpportunity(project.opportunity_json);
+  const researchQuery = buildOpportunityResearchQuery(project.topic, selectedOpportunity);
+  const researchTokens = buildOpportunityResearchTokens(project.topic, selectedOpportunity);
 
   const searchFilters: SearchFilters = {
     channelSlug: project.channel_slug,
@@ -3741,8 +4195,8 @@ async function rebuildScriptResearch(
   };
 
   const [semanticMatches, textMatches, topHooks, workspaceChannels] = await Promise.all([
-    runSemanticSearch(project.topic, searchFilters, 6, context, env),
-    runTextSearch(project.topic, searchFilters, 6, context, env),
+    runSemanticSearch(researchQuery, searchFilters, selectedOpportunity ? 8 : 6, context, env),
+    runTextSearch(researchQuery, searchFilters, selectedOpportunity ? 8 : 6, context, env),
     fetchHooks(analytics.channel.id, env, { limit: 5, sort: "views" }),
     listWorkspaceChannelRows(context, env),
   ]);
@@ -3757,7 +4211,15 @@ async function rebuildScriptResearch(
         ? buildFallbackPersonaSamples(topHooks)
         : [];
 
-  const quoteItems = (semanticMatches && semanticMatches.length > 0 ? semanticMatches : textMatches).slice(0, 6);
+  const quoteItems = selectedOpportunity
+    ? selectOpportunityQuoteItems(semanticMatches, textMatches, researchTokens, 4)
+    : (semanticMatches && semanticMatches.length > 0 ? semanticMatches : textMatches).slice(0, 6);
+  const prioritizedHooks = selectedOpportunity
+    ? selectRelevantHooksForOpportunity(topHooks, researchTokens, 3)
+    : topHooks.slice(0, 5);
+  const prioritizedTopicClusters = selectedOpportunity
+    ? selectRelevantTopicClustersForOpportunity(analytics.topicClusters, researchTokens, 2)
+    : analytics.topicClusters.slice(0, 4);
   const gapItems: Array<{
     averageViews: number;
     exemplarTitle: string;
@@ -3768,49 +4230,51 @@ async function rebuildScriptResearch(
     topic: string;
   }> = [];
 
-  const competitorChannels = workspaceChannels.filter((channel) => channel.slug !== project.channel_slug);
-  for (const competitor of competitorChannels) {
-    const competitorAnalytics = await getChannelAnalytics(competitor.slug, context, env);
-    if (!competitorAnalytics) continue;
+  if (!selectedOpportunity) {
+    const competitorChannels = workspaceChannels.filter((channel) => channel.slug !== project.channel_slug);
+    for (const competitor of competitorChannels) {
+      const competitorAnalytics = await getChannelAnalytics(competitor.slug, context, env);
+      if (!competitorAnalytics) continue;
 
-    const comparison = buildComparison(
-      {
-        slug: analytics.channel.slug,
-        channelName: analytics.channel.channel_name,
-        totalVideos: analytics.videos.length,
-        averageViews: analytics.averageViews,
-        medianViews: analytics.medianViews,
-        averageEngagementRate: analytics.averageEngagementRate,
-        uploadCadencePerWeek: analytics.stats.uploadCadencePerWeek.current,
-        bestDuration: analytics.stats.bestDuration,
-        topicClusters: analytics.topicClusters,
-      },
-      {
-        slug: competitorAnalytics.channel.slug,
-        channelName: competitorAnalytics.channel.channel_name,
-        totalVideos: competitorAnalytics.videos.length,
-        averageViews: competitorAnalytics.averageViews,
-        medianViews: competitorAnalytics.medianViews,
-        averageEngagementRate: competitorAnalytics.averageEngagementRate,
-        uploadCadencePerWeek: competitorAnalytics.stats.uploadCadencePerWeek.current,
-        bestDuration: competitorAnalytics.stats.bestDuration,
-        topicClusters: competitorAnalytics.topicClusters,
-      }
-    );
+      const comparison = buildComparison(
+        {
+          slug: analytics.channel.slug,
+          channelName: analytics.channel.channel_name,
+          totalVideos: analytics.videos.length,
+          averageViews: analytics.averageViews,
+          medianViews: analytics.medianViews,
+          averageEngagementRate: analytics.averageEngagementRate,
+          uploadCadencePerWeek: analytics.stats.uploadCadencePerWeek.current,
+          bestDuration: analytics.stats.bestDuration,
+          topicClusters: analytics.topicClusters,
+        },
+        {
+          slug: competitorAnalytics.channel.slug,
+          channelName: competitorAnalytics.channel.channel_name,
+          totalVideos: competitorAnalytics.videos.length,
+          averageViews: competitorAnalytics.averageViews,
+          medianViews: competitorAnalytics.medianViews,
+          averageEngagementRate: competitorAnalytics.averageEngagementRate,
+          uploadCadencePerWeek: competitorAnalytics.stats.uploadCadencePerWeek.current,
+          bestDuration: competitorAnalytics.stats.bestDuration,
+          topicClusters: competitorAnalytics.topicClusters,
+        }
+      );
 
-    gapItems.push(
-      ...comparison.topicGaps
-        .filter((item) => item.missingOn === analytics.channel.slug)
-        .map((item) => ({
-          averageViews: item.averageViews,
-          exemplarTitle: item.exemplarTitle,
-          exemplarVideoUrl: item.exemplarVideoUrl,
-          exemplarYoutubeId: item.exemplarYoutubeId,
-          opportunityScore: item.opportunityScore,
-          sourceChannel: item.sourceChannel,
-          topic: item.topic,
-        }))
-    );
+      gapItems.push(
+        ...comparison.topicGaps
+          .filter((item) => item.missingOn === analytics.channel.slug)
+          .map((item) => ({
+            averageViews: item.averageViews,
+            exemplarTitle: item.exemplarTitle,
+            exemplarVideoUrl: item.exemplarVideoUrl,
+            exemplarYoutubeId: item.exemplarYoutubeId,
+            opportunityScore: item.opportunityScore,
+            sourceChannel: item.sourceChannel,
+            topic: item.topic,
+          }))
+      );
+    }
   }
 
   const rows: Array<{
@@ -3837,7 +4301,7 @@ async function rebuildScriptResearch(
               recommendedHook: selectedOpportunity.recommendedHook,
               thumbnailDirection: selectedOpportunity.thumbnailDirection,
             },
-            score: selectedOpportunity.score,
+            score: 1000,
             sourceChannelSlug: selectedOpportunity.channelSlug,
             sourceVectorId: null,
             sourceYoutubeId: null,
@@ -3845,7 +4309,37 @@ async function rebuildScriptResearch(
           },
         ]
       : []),
-    ...quoteItems.map((item) => ({
+    ...(selectedOpportunity
+      ? selectedOpportunity.channelEvidence.slice(0, 3).map((item, index) => ({
+          excerpt: item.detail,
+          itemType: "channel_evidence",
+          metadata: {
+            href: item.href,
+            supportingMetric: item.supportingMetric,
+          },
+          score: 940 - index * 20,
+          sourceChannelSlug: project.channel_slug,
+          sourceVectorId: null,
+          sourceYoutubeId: null,
+          title: item.title,
+        }))
+      : []),
+    ...(selectedOpportunity
+      ? selectedOpportunity.competitorEvidence.slice(0, 3).map((item, index) => ({
+          excerpt: item.detail,
+          itemType: "competitor_evidence",
+          metadata: {
+            href: item.href,
+            supportingMetric: item.supportingMetric,
+          },
+          score: 880 - index * 20,
+          sourceChannelSlug: null,
+          sourceVectorId: null,
+          sourceYoutubeId: null,
+          title: item.title,
+        }))
+      : []),
+    ...quoteItems.map((item, index) => ({
       excerpt: item.snippet,
       itemType: "quote",
       metadata: {
@@ -3855,13 +4349,18 @@ async function rebuildScriptResearch(
         videoUrl: item.videoUrl,
         viewCount: item.viewCount,
       },
-      score: item.score ?? null,
+      score:
+        selectedOpportunity && researchTokens.length > 0
+          ? 780 -
+            index * 20 +
+            scoreOpportunityTextOverlap(`${item.title} ${item.snippet}`, researchTokens) * 5
+          : item.score ?? null,
       sourceChannelSlug: item.channelSlug,
       sourceVectorId: item.vectorId,
       sourceYoutubeId: item.youtubeId,
       title: item.title,
     })),
-    ...topHooks.map((hook) => ({
+    ...prioritizedHooks.map((hook, index) => ({
       excerpt: hook.text,
       itemType: "hook",
       metadata: {
@@ -3871,13 +4370,13 @@ async function rebuildScriptResearch(
         videoUrl: hook.videoUrl,
         viewCount: hook.viewCount,
       },
-      score: hook.viewCount,
+      score: selectedOpportunity ? 620 - index * 20 : hook.viewCount,
       sourceChannelSlug: project.channel_slug,
       sourceVectorId: null,
       sourceYoutubeId: hook.youtubeId,
       title: hook.videoTitle,
     })),
-    ...personaSamples.map((sample, index) => ({
+    ...personaSamples.slice(0, selectedOpportunity ? 2 : 3).map((sample, index) => ({
       excerpt: sample.content,
       itemType: "persona_style",
       metadata: {
@@ -3886,13 +4385,13 @@ async function rebuildScriptResearch(
         prompt: sample.prompt,
         source: sample.source,
       },
-      score: 10_000 - index,
+      score: selectedOpportunity ? 120 - index * 5 : 40 - index,
       sourceChannelSlug: project.channel_slug,
       sourceVectorId: null,
       sourceYoutubeId: null,
       title: sample.title,
     })),
-    ...analytics.topicClusters.slice(0, 4).map((topic) => ({
+    ...prioritizedTopicClusters.map((topic, index) => ({
       excerpt: `Average views ${topic.averageViews.toLocaleString()} across ${topic.videoCount} videos.`,
       itemType: "topic_cluster",
       metadata: {
@@ -3901,29 +4400,31 @@ async function rebuildScriptResearch(
         shareOfChannel: topic.shareOfChannel,
         topVideoTitle: topic.topVideoTitle,
       },
-      score: topic.averageViews,
+      score: selectedOpportunity ? 520 - index * 20 : topic.averageViews,
       sourceChannelSlug: project.channel_slug,
       sourceVectorId: null,
       sourceYoutubeId: topic.topVideoYoutubeId,
       title: topic.topic,
     })),
-    ...gapItems
-      .sort((left, right) => right.opportunityScore - left.opportunityScore)
-      .slice(0, 4)
-      .map((item) => ({
-        excerpt: `${item.sourceChannel} is winning on ${item.topic} with ${Math.round(item.averageViews).toLocaleString()} average views.`,
-        itemType: "gap",
-        metadata: {
-          exemplarTitle: item.exemplarTitle,
-          exemplarVideoUrl: item.exemplarVideoUrl,
-          opportunityScore: item.opportunityScore,
-        },
-        score: item.opportunityScore,
-        sourceChannelSlug: item.sourceChannel,
-        sourceVectorId: null,
-        sourceYoutubeId: item.exemplarYoutubeId,
-        title: item.topic,
-      })),
+    ...(!selectedOpportunity
+      ? gapItems
+          .sort((left, right) => right.opportunityScore - left.opportunityScore)
+          .slice(0, 4)
+          .map((item) => ({
+            excerpt: `${item.sourceChannel} is winning on ${item.topic} with ${Math.round(item.averageViews).toLocaleString()} average views.`,
+            itemType: "gap",
+            metadata: {
+              exemplarTitle: item.exemplarTitle,
+              exemplarVideoUrl: item.exemplarVideoUrl,
+              opportunityScore: item.opportunityScore,
+            },
+            score: item.opportunityScore,
+            sourceChannelSlug: item.sourceChannel,
+            sourceVectorId: null,
+            sourceYoutubeId: item.exemplarYoutubeId,
+            title: item.topic,
+          }))
+      : []),
   ];
 
   await env.DB.prepare(`DELETE FROM script_research_items WHERE project_id = ?`).bind(project.id).run();
@@ -4035,11 +4536,25 @@ async function generateScriptProjectOutput(
   };
 
   const manualContent = String(payload?.content ?? "").trim();
+  const fallbackGenerated = generateScriptLabStep(rawStep, generatorContext);
+  const aiGenerated =
+    manualContent || !AI_SCRIPT_LAB_STEPS.has(rawStep)
+      ? null
+      : await maybeGenerateScriptLabStepWithAi(
+          rawStep,
+          generatorContext,
+          ensuredResearch,
+          selectedPersonaModel,
+          topHooks,
+          env
+        );
   const generated = manualContent
     ? { content: manualContent, metadata: { source: "manual" } }
-    : generateScriptLabStep(rawStep, generatorContext);
+    : aiGenerated ?? fallbackGenerated;
   const modelKey = manualContent
     ? "manual"
+    : aiGenerated
+      ? aiGenerated.modelKey
     : selectedPersonaModel
       ? "persona-template-v1"
       : "retrieval-template-v1";

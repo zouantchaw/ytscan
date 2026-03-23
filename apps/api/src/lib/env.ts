@@ -21,6 +21,7 @@ export type Env = {
   RESEND_API_KEY?: string;
   RESEND_FROM_EMAIL?: string;
   RESEND_FROM_NAME?: string;
+  SCRIPT_LAB_TEXT_MODEL?: string;
   SINGLE_TENANT_MODE?: string;
   TRANSCRIPTS_INDEX?: VectorizeIndex;
 };

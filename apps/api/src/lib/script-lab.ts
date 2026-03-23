@@ -108,6 +108,15 @@ function formatVoiceNotes(topHooks: HookSummary[], researchItems: ResearchItemLi
   return [...personaNotes, ...hookNotes, ...quoteNotes].slice(0, 6);
 }
 
+function formatOpportunityEvidenceLine(
+  title: string,
+  detail: string,
+  supportingMetric: string | null | undefined
+): string {
+  const metricSuffix = supportingMetric ? ` (${supportingMetric})` : "";
+  return `${title}${metricSuffix}: ${detail}`;
+}
+
 function findExistingOutput(existingOutputs: OutputLike[], step: string): OutputLike | null {
   const matches = existingOutputs
     .filter((output) => output.step === step)
@@ -117,15 +126,17 @@ function findExistingOutput(existingOutputs: OutputLike[], step: string): Output
 
 function buildHookDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const channelProof = context.opportunity.channelEvidence
+      .slice(0, 2)
+      .map((item) => formatOpportunityEvidenceLine(item.title, item.detail, item.supportingMetric));
+    const competitorProof = context.opportunity.competitorEvidence
+      .slice(0, 2)
+      .map((item) => formatOpportunityEvidenceLine(item.title, item.detail, item.supportingMetric));
+
     const proofPoints = [
-      ...context.opportunity.channelEvidence,
-      ...context.opportunity.competitorEvidence,
+      ...channelProof,
+      ...competitorProof,
     ]
-      .slice(0, 4)
-      .map(
-        (item) =>
-          `- ${item.title}: ${item.detail}${item.supportingMetric ? ` (${item.supportingMetric})` : ""}`
-      )
       .join("\n");
 
     return {
@@ -135,16 +146,16 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
         "## Option 1 (recommended)",
         context.opportunity.recommendedHook,
         "",
-        "## Option 2 (angle-first)",
-        `${context.opportunity.topic} looks obvious until you see the version serious operators actually bet on.`,
+        "## Option 2 (operator lens)",
+        `${context.opportunity.topic} looks mainstream from the outside, but the money is in the version smart operators see before everyone else does.`,
         "",
         "## Option 3 (contrarian)",
-        `The biggest mistake people make about ${context.opportunity.topic} is assuming the obvious opportunity is the best one.`,
+        `The biggest mistake people make about ${context.opportunity.topic} is chasing the flashy story instead of the boring angle that actually compounds.`,
         "",
-        "## Why this should work",
-        context.opportunity.rationale,
+        "## Why these hooks should work",
+        `${context.opportunity.whyNow} ${context.opportunity.rationale}`,
         "",
-        "## Proof points to support the opening",
+        "## Proof points to land in the opening",
         proofPoints || "- Pull the strongest example from the selected opportunity.",
       ].join("\n"),
       metadata: {
@@ -200,6 +211,11 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
 
 function buildOutlineDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const proofStack = [
+      ...context.opportunity.channelEvidence,
+      ...context.opportunity.competitorEvidence,
+    ].slice(0, 4);
+
     return {
       content: [
         `# Outline for ${context.projectTitle}`,
@@ -207,25 +223,21 @@ function buildOutlineDraft(context: ScriptLabGenerationContext) {
         "## 1. Cold open",
         context.opportunity.recommendedHook,
         "",
-        "## 2. Why this matters now",
+        "## 2. Why the audience should care now",
         context.opportunity.whyNow,
         "",
-        "## 3. Core angle",
+        "## 3. Thesis",
         context.opportunity.angle,
         "",
-        "## 4. Proof and examples",
-        ...context.opportunity.channelEvidence.map(
-          (item) => `- ${item.title}: ${item.detail}${item.supportingMetric ? ` (${item.supportingMetric})` : ""}`
-        ),
-        ...context.opportunity.competitorEvidence.map(
-          (item) => `- ${item.title}: ${item.detail}${item.supportingMetric ? ` (${item.supportingMetric})` : ""}`
-        ),
+        "## 4. Proof stack",
+        ...proofStack.map((item) => `- ${formatOpportunityEvidenceLine(item.title, item.detail, item.supportingMetric)}`),
+        ...(proofStack.length === 0 ? ["- Pull one channel-native winner and one competitor case study."] : []),
         "",
-        "## 5. Viewer takeaway",
-        `Show the audience how to evaluate ${context.opportunity.topic} more like an owner and less like a spectator.`,
+        "## 5. Decision rule",
+        `Show the audience how to evaluate ${context.opportunity.topic} more like an owner and less like a spectator. Give them a concrete filter they can use next week.`,
         "",
         "## 6. Close",
-        `End with a clear next move or filter viewers can use the next time they assess ${context.opportunity.topic}.`,
+        `End with the one question viewers should ask before they ever chase ${context.opportunity.topic}.`,
       ].join("\n"),
       metadata: {
         source: "opportunity",
@@ -280,6 +292,9 @@ function buildOutlineDraft(context: ScriptLabGenerationContext) {
 
 function buildScriptDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const leadProof = context.opportunity.channelEvidence[0] ?? context.opportunity.competitorEvidence[0] ?? null;
+    const secondaryProof = context.opportunity.competitorEvidence[0] ?? context.opportunity.channelEvidence[1] ?? null;
+
     return {
       content: [
         `# Script Draft: ${context.projectTitle}`,
@@ -288,20 +303,23 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
         `- Direct, contrarian, practical, and operator-first for ${context.channelName}.`,
         `- Keep the frame on ${context.opportunity.topic}, but push toward what is misunderstood or underpriced.`,
         "",
-        "## Draft",
+        "## First-minute draft",
         context.opportunity.recommendedHook,
         "",
-        `${context.opportunity.whyNow} That is exactly why this topic matters right now.`,
+        `${context.opportunity.whyNow} That is exactly why this topic matters right now, because most people are still looking at the wrong part of the story.`,
         "",
         `Here is the angle I want to make clear from the start: ${context.opportunity.angle}`,
         "",
-        `${context.opportunity.rationale} So instead of repeating the usual advice, we are going to break down the version that actually matters to someone trying to build wealth through smart business decisions.`,
+        leadProof
+          ? `${leadProof.title}${leadProof.supportingMetric ? `, ${leadProof.supportingMetric},` : ""} is the proof point that makes this argument real. ${leadProof.detail}`
+          : `${context.opportunity.rationale} So instead of repeating the usual advice, we are going to break down the version that actually matters to someone trying to build wealth through smart business decisions.`,
         "",
-        "First, we show the obvious story people tell themselves.",
-        "Then, we break that story with proof.",
-        "Then, we show the operator lens the viewer can actually steal.",
+        "Most people tell the obvious version of this story. The better version is the one an operator sees before the crowd does.",
+        secondaryProof
+          ? `${secondaryProof.title}${secondaryProof.supportingMetric ? `, ${secondaryProof.supportingMetric},` : ""} is the comparison point that sharpens that contrast. ${secondaryProof.detail}`
+          : `The job now is to break the audience out of the default framing and show them the real decision that sits underneath ${context.opportunity.topic}.`,
         "",
-        `By the end of this video, the viewer should know exactly what to look for, what to avoid, and why the boring version of ${context.opportunity.topic} might be the one with the best upside.`,
+        `By the end of this opening minute, the viewer should know exactly what to look for, what to avoid, and why the boring version of ${context.opportunity.topic} might be the one with the best upside.`,
       ].join("\n"),
       metadata: {
         source: "opportunity",
@@ -361,22 +379,24 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
 
 function buildDirectorNotesDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const proofItem = context.opportunity.channelEvidence[0] ?? context.opportunity.competitorEvidence[0] ?? null;
+
     return {
       content: [
         `# Director's Notes: ${context.projectTitle}`,
         "",
         "## Opening visual grammar",
-        "- Start on a direct talking-head line, then cut quickly to a concrete business image or artifact.",
-        "- Use big on-screen text only when reinforcing the contrarian claim.",
+        "- Start on a direct talking-head line, then cut quickly to one concrete business artifact that proves the claim.",
+        "- Use big on-screen text only for the contrarian angle and the money line.",
         "",
         "## Story beats",
         `- Beat 1: establish the obvious narrative around ${context.opportunity.topic}.`,
         `- Beat 2: hard pivot into the real angle: ${context.opportunity.angle}`,
-        "- Beat 3: support with one channel-native example and one market or competitor example.",
+        `- Beat 3: land the proof stack${proofItem ? ` starting with ${proofItem.title}` : " with one channel-native example and one market example"}.`,
         "",
         "## Editing notes",
-        "- Use fast match cuts in the hook, then slow down when the proof begins.",
-        "- Keep lower-thirds concise; the argument should do the heavy lifting.",
+        "- Use fast match cuts in the hook, then slow down slightly when the proof begins so the audience can process the business logic.",
+        "- Keep lower-thirds concise. The argument should do the heavy lifting, not the labels.",
         "",
         "## Visual callbacks",
         `- Reuse thumbnail language around: ${context.opportunity.thumbnailDirection}`,
