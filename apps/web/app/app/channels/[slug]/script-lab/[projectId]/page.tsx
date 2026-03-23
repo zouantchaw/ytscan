@@ -354,6 +354,299 @@ function OpportunitySummaryPanel({ project }: { project: ScriptProjectDetail }) 
   );
 }
 
+function getSuggestedTitles(project: ScriptProjectDetail): string[] {
+  if (project.opportunity) {
+    const { topic, packageSeed, title } = project.opportunity;
+    const cleanTopic = topic.trim();
+    const loweredTopic = cleanTopic.toLowerCase();
+    return [
+      packageSeed.title,
+      title,
+      `Why ${loweredTopic} is really an operator story`,
+      `The hidden business model inside ${cleanTopic}`,
+    ].filter((value, index, items) => value && items.indexOf(value) === index).slice(0, 3);
+  }
+
+  const cleanTopic = project.topic.trim();
+  const loweredTopic = cleanTopic.toLowerCase();
+  return [
+    project.title,
+    `The contrarian play inside ${cleanTopic}`,
+    `What most people miss about ${loweredTopic}`,
+  ].filter((value, index, items) => value && items.indexOf(value) === index).slice(0, 3);
+}
+
+function formatResearchSourceMeta(item: ScriptProjectDetail["researchItems"][number]) {
+  const metadata = parseRecord(item.metadata);
+  const metric =
+    metadataString(metadata, "supportingMetric") ??
+    (metadataNumber(metadata, "viewCount") ? `${formatCompactNumber(metadataNumber(metadata, "viewCount") ?? 0)} views` : null);
+  const source =
+    metadataString(metadata, "videoTitle") ??
+    metadataString(metadata, "exemplarTitle") ??
+    metadataString(metadata, "source");
+
+  return [metric, source].filter(Boolean).join(" · ");
+}
+
+function ResearchEvidencePanel({
+  title,
+  description,
+  items,
+  empty,
+}: {
+  title: string;
+  description: string;
+  items: ScriptProjectDetail["researchItems"];
+  empty: string;
+}) {
+  return (
+    <AppPanel className="grid gap-4 px-5 py-5">
+      <div className="space-y-1">
+        <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
+          {title}
+        </h2>
+        <p className="text-[14px] leading-6 text-muted-foreground">{description}</p>
+      </div>
+      {items.length ? (
+        <div className="grid gap-3">
+          {items.map((item) => (
+            <div key={item.id} className="rounded-[12px] border border-border bg-background px-4 py-4">
+              <p className="text-[15px] font-semibold text-foreground">
+                {item.title ?? "Untitled source"}
+              </p>
+              {formatResearchSourceMeta(item) ? (
+                <p className="mt-1 text-[12px] font-medium uppercase tracking-[0.06em] text-primary">
+                  {formatResearchSourceMeta(item)}
+                </p>
+              ) : null}
+              <p className="mt-2 text-[14px] leading-7 text-muted-foreground">
+                {item.excerpt ?? "No excerpt available."}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[14px] leading-7 text-muted-foreground">{empty}</p>
+      )}
+    </AppPanel>
+  );
+}
+
+function ResearchStepLayout({
+  project,
+  activePersonaLabel,
+  isPending,
+  error,
+  onBuildResearch,
+  onGenerateHooks,
+}: {
+  project: ScriptProjectDetail;
+  activePersonaLabel: string | null;
+  isPending: boolean;
+  error: string | null;
+  onBuildResearch: () => void;
+  onGenerateHooks: () => void;
+}) {
+  const opportunityBrief = project.researchItems.find((item) => item.itemType === "opportunity_brief") ?? null;
+  const channelProof = project.researchItems.filter((item) => item.itemType === "channel_evidence").slice(0, 3);
+  const competitorProof = project.researchItems
+    .filter((item) => item.itemType === "competitor_evidence")
+    .slice(0, 3);
+  const quotes = project.researchItems.filter((item) => item.itemType === "quote").slice(0, 4);
+  const voiceAnchors = project.researchItems
+    .filter((item) => item.itemType === "persona_style")
+    .slice(0, 3);
+  const suggestedTitles = getSuggestedTitles(project);
+
+  return (
+    <div className="grid gap-9 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <p className="text-[13px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              Research Brief
+            </p>
+            <h1 className="font-display text-[40px] font-semibold tracking-[-0.05em] text-foreground">
+              {project.title}
+            </h1>
+            <p className="text-[15px] leading-7 text-muted-foreground">
+              {project.opportunity
+                ? "This brief should answer one question clearly: why this is the best next video to greenlight."
+                : "This brief should stack the best evidence, proof points, and positioning for the topic."}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={onBuildResearch} disabled={isPending}>
+              {isPending ? "Refreshing..." : "Refresh Research"}
+            </Button>
+            <Button onClick={onGenerateHooks} disabled={isPending}>
+              {isPending ? "Generating..." : "Generate Hook Options"}
+            </Button>
+          </div>
+        </div>
+
+        <AppPanel className="grid gap-5 px-6 py-6">
+          <div className="grid gap-2">
+            <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              Package thesis
+            </p>
+            <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+              {project.opportunity?.title ?? project.title}
+            </h2>
+            <p className="text-[16px] leading-8 text-foreground">
+              {project.opportunity?.angle ?? project.topic}
+            </p>
+            <p className="text-[15px] leading-7 text-muted-foreground">
+              {project.opportunity?.whyNow ??
+                opportunityBrief?.excerpt ??
+                "Use the evidence below to decide whether this topic is strong enough to turn into a package."}
+            </p>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="rounded-[12px] border border-border bg-background px-4 py-4">
+              <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Best hook angle
+              </p>
+              <p className="mt-2 text-[15px] leading-7 text-foreground">
+                {project.opportunity?.recommendedHook ??
+                  "Lead with the most counterintuitive business lesson in the evidence stack."}
+              </p>
+            </div>
+            <div className="rounded-[12px] border border-border bg-background px-4 py-4">
+              <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Recommended format
+              </p>
+              <p className="mt-2 text-[15px] leading-7 text-foreground">
+                {project.opportunity?.recommendedFormat ?? "Evidence-led business explainer"}
+              </p>
+              <p className="text-[13px] text-muted-foreground">
+                {project.opportunity?.recommendedDuration ?? "12-18 min"}
+              </p>
+            </div>
+            <div className="rounded-[12px] border border-border bg-background px-4 py-4">
+              <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Thumbnail promise
+              </p>
+              <p className="mt-2 text-[15px] leading-7 text-foreground">
+                {project.opportunity?.thumbnailDirection ??
+                  "Use one instantly legible business claim and a single dominant subject."}
+              </p>
+            </div>
+          </div>
+        </AppPanel>
+
+        <AppPanel className="grid gap-4 px-6 py-6">
+          <div className="space-y-1">
+            <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
+              Titles to test
+            </h2>
+            <p className="text-[14px] leading-6 text-muted-foreground">
+              Three production-ready directions to pressure-test before you move into hooks and the first-minute draft.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {suggestedTitles.map((title, index) => (
+              <div
+                key={title}
+                className="rounded-[12px] border border-border bg-background px-4 py-4"
+              >
+                <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Option {index + 1}
+                </p>
+                <p className="mt-2 text-[15px] leading-7 text-foreground">{title}</p>
+              </div>
+            ))}
+          </div>
+        </AppPanel>
+
+        <div className="grid gap-5 xl:grid-cols-2">
+          <ResearchEvidencePanel
+            title="Channel proof"
+            description="Why this already fits the channel's audience and format memory."
+            items={channelProof}
+            empty="No channel-native proof has been attached yet."
+          />
+          <ResearchEvidencePanel
+            title="Competitor proof"
+            description="External evidence that the audience already responds to this angle."
+            items={competitorProof}
+            empty="No competitor proof is attached to this package yet."
+          />
+        </div>
+
+        <ResearchEvidencePanel
+          title="Proof to cite in the opening minute"
+          description="These are the strongest transcript or semantic evidence clips to anchor the script in specifics."
+          items={quotes}
+          empty="Build research again to pull stronger quotes into the package."
+        />
+
+        <ResearchEvidencePanel
+          title="Voice anchors"
+          description="Use these persona or corpus references to keep the delivery in the creator's lane."
+          items={voiceAnchors}
+          empty="No persona-style anchors are attached yet."
+        />
+
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+
+      <aside className="grid gap-5">
+        <AppPanel className="grid gap-3 px-5 py-5">
+          <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
+            Package Info
+          </h2>
+          <div className="grid gap-2 text-sm text-muted-foreground">
+            <p className="flex items-center justify-between gap-4">
+              <span>Channel</span>
+              <span className="font-medium text-foreground">{project.channelName ?? "Unassigned"}</span>
+            </p>
+            <p className="flex items-center justify-between gap-4">
+              <span>Status</span>
+              <span className="font-medium capitalize text-foreground">{project.status}</span>
+            </p>
+            <p className="flex items-center justify-between gap-4">
+              <span>Research items</span>
+              <span className="font-medium text-foreground">{project.researchItems.length}</span>
+            </p>
+            <p className="flex items-center justify-between gap-4">
+              <span>Updated</span>
+              <span className="font-medium text-foreground">{formatRelativeDate(project.updatedAt)}</span>
+            </p>
+          </div>
+        </AppPanel>
+
+        <OpportunitySummaryPanel project={project} />
+
+        <AppPanel className="grid gap-3 px-5 py-5">
+          <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
+            Why this package
+          </h2>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>{project.opportunity?.rationale ?? "This package is using your selected topic and current channel context."}</p>
+            <p>{activePersonaLabel ?? "No trained persona model attached yet."}</p>
+          </div>
+        </AppPanel>
+
+        <AppPanel className="grid gap-3 px-5 py-5">
+          <h2 className="font-display text-[22px] font-semibold tracking-[-0.04em] text-foreground">
+            Next Action
+          </h2>
+          <p className="text-sm leading-7 text-muted-foreground">
+            If this brief feels credible, move to Hook Options next. That is the first irreversible creative decision in the package.
+          </p>
+          <Button onClick={onGenerateHooks} disabled={isPending}>
+            {isPending ? "Generating..." : "Generate Hook Options"}
+          </Button>
+        </AppPanel>
+      </aside>
+    </div>
+  );
+}
+
 function GenericStepLayout({
   slug,
   project,
@@ -1141,7 +1434,16 @@ export default function ScriptLabProjectPage() {
         />
 
         <section className="flex-1 px-6 py-9 md:px-10 xl:px-12">
-          {activeStep === "thumbnail_brief" ? (
+          {activeStep === "research" ? (
+            <ResearchStepLayout
+              project={project}
+              activePersonaLabel={activePersonaLabel}
+              isPending={isPending}
+              error={error}
+              onBuildResearch={handleBuildResearch}
+              onGenerateHooks={() => handleGenerate("hooks")}
+            />
+          ) : activeStep === "thumbnail_brief" ? (
             <ThumbnailReviewLayout
               slug={slug}
               projectId={projectId}

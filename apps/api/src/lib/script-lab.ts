@@ -124,8 +124,18 @@ function findExistingOutput(existingOutputs: OutputLike[], step: string): Output
   return matches[0] ?? null;
 }
 
+function getOpportunityViewerTopic(opportunity: ChannelOpportunity): string {
+  return cleanText(opportunity.packageSeed.topic) || cleanText(opportunity.title) || cleanText(opportunity.topic);
+}
+
+function getOpportunityViewerTitle(opportunity: ChannelOpportunity): string {
+  return cleanText(opportunity.packageSeed.title) || cleanText(opportunity.title) || cleanText(opportunity.topic);
+}
+
 function buildHookDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const viewerTopic = getOpportunityViewerTopic(context.opportunity);
+    const viewerTitle = getOpportunityViewerTitle(context.opportunity);
     const channelProof = context.opportunity.channelEvidence
       .slice(0, 2)
       .map((item) => formatOpportunityEvidenceLine(item.title, item.detail, item.supportingMetric));
@@ -141,16 +151,16 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
 
     return {
       content: [
-        `# Hooks for ${context.projectTitle}`,
+        `# Hooks for ${viewerTitle}`,
         "",
         "## Option 1 (recommended)",
         context.opportunity.recommendedHook,
         "",
         "## Option 2 (operator lens)",
-        `${context.opportunity.topic} looks mainstream from the outside, but the money is in the version smart operators see before everyone else does.`,
+        `${viewerTopic} looks mainstream from the outside, but the money is in the version smart operators see before everyone else does.`,
         "",
         "## Option 3 (contrarian)",
-        `The biggest mistake people make about ${context.opportunity.topic} is chasing the flashy story instead of the boring angle that actually compounds.`,
+        `The biggest mistake people make about ${viewerTopic} is chasing the flashy story instead of the boring angle that actually compounds.`,
         "",
         "## Why these hooks should work",
         `${context.opportunity.whyNow} ${context.opportunity.rationale}`,
@@ -211,6 +221,8 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
 
 function buildOutlineDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const viewerTopic = getOpportunityViewerTopic(context.opportunity);
+    const viewerTitle = getOpportunityViewerTitle(context.opportunity);
     const proofStack = [
       ...context.opportunity.channelEvidence,
       ...context.opportunity.competitorEvidence,
@@ -218,7 +230,7 @@ function buildOutlineDraft(context: ScriptLabGenerationContext) {
 
     return {
       content: [
-        `# Outline for ${context.projectTitle}`,
+        `# Outline for ${viewerTitle}`,
         "",
         "## 1. Cold open",
         context.opportunity.recommendedHook,
@@ -234,10 +246,10 @@ function buildOutlineDraft(context: ScriptLabGenerationContext) {
         ...(proofStack.length === 0 ? ["- Pull one channel-native winner and one competitor case study."] : []),
         "",
         "## 5. Decision rule",
-        `Show the audience how to evaluate ${context.opportunity.topic} more like an owner and less like a spectator. Give them a concrete filter they can use next week.`,
+        `Show the audience how to evaluate ${viewerTopic} more like an owner and less like a spectator. Give them a concrete filter they can use next week.`,
         "",
         "## 6. Close",
-        `End with the one question viewers should ask before they ever chase ${context.opportunity.topic}.`,
+        `End with the one question viewers should ask before they ever chase ${viewerTopic}.`,
       ].join("\n"),
       metadata: {
         source: "opportunity",
@@ -292,6 +304,7 @@ function buildOutlineDraft(context: ScriptLabGenerationContext) {
 
 function buildScriptDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const viewerTopic = getOpportunityViewerTopic(context.opportunity);
     const leadProof = context.opportunity.channelEvidence[0] ?? context.opportunity.competitorEvidence[0] ?? null;
     const secondaryProof = context.opportunity.competitorEvidence[0] ?? context.opportunity.channelEvidence[1] ?? null;
 
@@ -301,7 +314,7 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
         "",
         "## Voice targets",
         `- Direct, contrarian, practical, and operator-first for ${context.channelName}.`,
-        `- Keep the frame on ${context.opportunity.topic}, but push toward what is misunderstood or underpriced.`,
+        `- Keep the frame on ${viewerTopic}, but push toward what is misunderstood or underpriced.`,
         "",
         "## First-minute draft",
         context.opportunity.recommendedHook,
@@ -317,9 +330,9 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
         "Most people tell the obvious version of this story. The better version is the one an operator sees before the crowd does.",
         secondaryProof
           ? `${secondaryProof.title}${secondaryProof.supportingMetric ? `, ${secondaryProof.supportingMetric},` : ""} is the comparison point that sharpens that contrast. ${secondaryProof.detail}`
-          : `The job now is to break the audience out of the default framing and show them the real decision that sits underneath ${context.opportunity.topic}.`,
+          : `The job now is to break the audience out of the default framing and show them the real decision that sits underneath ${viewerTopic}.`,
         "",
-        `By the end of this opening minute, the viewer should know exactly what to look for, what to avoid, and why the boring version of ${context.opportunity.topic} might be the one with the best upside.`,
+        `By the end of this opening minute, the viewer should know exactly what to look for, what to avoid, and why the boring version of ${viewerTopic} might be the one with the best upside.`,
       ].join("\n"),
       metadata: {
         source: "opportunity",
@@ -379,6 +392,7 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
 
 function buildDirectorNotesDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const viewerTopic = getOpportunityViewerTopic(context.opportunity);
     const proofItem = context.opportunity.channelEvidence[0] ?? context.opportunity.competitorEvidence[0] ?? null;
 
     return {
@@ -390,7 +404,7 @@ function buildDirectorNotesDraft(context: ScriptLabGenerationContext) {
         "- Use big on-screen text only for the contrarian angle and the money line.",
         "",
         "## Story beats",
-        `- Beat 1: establish the obvious narrative around ${context.opportunity.topic}.`,
+        `- Beat 1: establish the obvious narrative around ${viewerTopic}.`,
         `- Beat 2: hard pivot into the real angle: ${context.opportunity.angle}`,
         `- Beat 3: land the proof stack${proofItem ? ` starting with ${proofItem.title}` : " with one channel-native example and one market example"}.`,
         "",
@@ -450,6 +464,7 @@ function buildDirectorNotesDraft(context: ScriptLabGenerationContext) {
 
 function buildThumbnailBriefDraft(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const viewerTopic = getOpportunityViewerTopic(context.opportunity);
     return {
       content: [
         `# Thumbnail Brief: ${context.projectTitle}`,
@@ -466,7 +481,7 @@ function buildThumbnailBriefDraft(context: ScriptLabGenerationContext) {
         "- NOBODY SEES THIS",
         "",
         "## Visual notes",
-        `- Keep the image clearly tied to ${context.opportunity.topic}.`,
+        `- Keep the image clearly tied to ${viewerTopic}.`,
         "- One subject, one argument, one emotional read.",
         "- Optimize for instant curiosity, not full explanation.",
       ].join("\n"),
@@ -505,6 +520,7 @@ function buildThumbnailBriefDraft(context: ScriptLabGenerationContext) {
 
 function buildPrevisBrief(context: ScriptLabGenerationContext) {
   if (context.opportunity) {
+    const viewerTopic = getOpportunityViewerTopic(context.opportunity);
     const directorNotes = findExistingOutput(context.existingOutputs, "director_notes");
     const scriptOutput = findExistingOutput(context.existingOutputs, "script");
 
@@ -513,7 +529,7 @@ function buildPrevisBrief(context: ScriptLabGenerationContext) {
         `# Previsualization Brief: ${context.projectTitle}`,
         "",
         "## Objective",
-        `Render a rough 60-90 second intro animatic for ${context.opportunity.topic} that stress-tests the hook, argument, and visual direction before production.`,
+        `Render a rough 60-90 second intro animatic for ${viewerTopic} that stress-tests the hook, argument, and visual direction before production.`,
         "",
         "## Story spine",
         context.opportunity.recommendedHook,

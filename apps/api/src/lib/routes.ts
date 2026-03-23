@@ -176,6 +176,20 @@ type OpportunityCandidate = {
   };
 };
 
+type OpportunityCurationResult = {
+  id: string;
+  title?: string;
+  topic?: string;
+  angle?: string;
+  rationale?: string;
+  whyNow?: string;
+  recommendedHook?: string;
+  recommendedFormat?: string;
+  recommendedDuration?: string;
+  thumbnailDirection?: string;
+  packageSeedTitle?: string;
+};
+
 type ScriptOutputRow = {
   id: string;
   project_id: string;
@@ -314,6 +328,31 @@ const OPPORTUNITY_BUSINESS_TOKENS = new Set([
   "storage",
   "vending",
   "wealth",
+]);
+
+const OPPORTUNITY_BLOCKLIST_TOKENS = new Set([
+  "airport",
+  "assassin",
+  "border",
+  "country",
+  "countries",
+  "deep",
+  "dictator",
+  "election",
+  "flat",
+  "geography",
+  "government",
+  "history",
+  "killed",
+  "map",
+  "military",
+  "politics",
+  "president",
+  "religion",
+  "secret",
+  "state",
+  "states",
+  "war",
 ]);
 
 const OPPORTUNITY_STOP_WORDS = new Set([
@@ -2592,6 +2631,220 @@ function isBusinessAdjacentOpportunity(tokens: string[]): boolean {
   return getOpportunityBusinessFitScore(tokens) > 0;
 }
 
+function hasBlockedOpportunityToken(tokens: string[]): boolean {
+  return tokens.some((token) => OPPORTUNITY_BLOCKLIST_TOKENS.has(token));
+}
+
+function extractJsonObjectPayload(value: string): string | null {
+  const trimmed = value.trim();
+  const withoutFences = trimmed
+    .replace(/^```[a-zA-Z0-9_-]*\s*/u, "")
+    .replace(/\s*```$/u, "")
+    .trim();
+  const startIndex = withoutFences.indexOf("{");
+  const endIndex = withoutFences.lastIndexOf("}");
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return null;
+  }
+  return withoutFences.slice(startIndex, endIndex + 1);
+}
+
+function parseOpportunityCurationResults(value: string): OpportunityCurationResult[] | null {
+  const rawJson = extractJsonObjectPayload(value);
+  if (!rawJson) return null;
+
+  try {
+    const parsed = JSON.parse(rawJson) as { items?: unknown };
+    if (!Array.isArray(parsed.items)) return null;
+
+    const items = parsed.items
+      .map((item) => (item && typeof item === "object" ? (item as Record<string, unknown>) : null))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+      .map((item) => ({
+        id: typeof item.id === "string" ? item.id.trim() : "",
+        title: typeof item.title === "string" ? item.title.trim() : undefined,
+        topic: typeof item.topic === "string" ? item.topic.trim() : undefined,
+        angle: typeof item.angle === "string" ? item.angle.trim() : undefined,
+        rationale: typeof item.rationale === "string" ? item.rationale.trim() : undefined,
+        whyNow: typeof item.whyNow === "string" ? item.whyNow.trim() : undefined,
+        recommendedHook:
+          typeof item.recommendedHook === "string" ? item.recommendedHook.trim() : undefined,
+        recommendedFormat:
+          typeof item.recommendedFormat === "string" ? item.recommendedFormat.trim() : undefined,
+        recommendedDuration:
+          typeof item.recommendedDuration === "string" ? item.recommendedDuration.trim() : undefined,
+        thumbnailDirection:
+          typeof item.thumbnailDirection === "string" ? item.thumbnailDirection.trim() : undefined,
+        packageSeedTitle:
+          typeof item.packageSeedTitle === "string" ? item.packageSeedTitle.trim() : undefined,
+      }))
+      .filter((item) => item.id);
+
+    return items.length ? items : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildOpportunityCandidateDigest(candidate: OpportunityCandidate): string {
+  const channelEvidence = candidate.channelEvidence
+    .slice(0, 2)
+    .map(
+      (item) =>
+        `- ${item.title}${item.supportingMetric ? ` (${item.supportingMetric})` : ""}: ${item.detail}`
+    )
+    .join("\n");
+  const competitorEvidence = candidate.competitorEvidence
+    .slice(0, 2)
+    .map(
+      (item) =>
+        `- ${item.title}${item.supportingMetric ? ` (${item.supportingMetric})` : ""}: ${item.detail}`
+    )
+    .join("\n");
+
+  return [
+    `Candidate ID: ${candidate.id}`,
+    `Type: ${candidate.opportunityType}`,
+    `Current title: ${candidate.title}`,
+    `Topic: ${candidate.topic}`,
+    `Package seed title: ${candidate.packageSeed.title}`,
+    `Angle: ${candidate.angle}`,
+    `Why now: ${candidate.whyNow}`,
+    `Recommended hook: ${candidate.recommendedHook}`,
+    channelEvidence ? `Channel evidence:\n${channelEvidence}` : "",
+    competitorEvidence ? `Competitor evidence:\n${competitorEvidence}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isFailureRateLane(topic: string, topVideoTitle: string): boolean {
+  return /\b(failure|fail|success)\b/i.test(topic) || /\b(never fail|always fail|failure rate)\b/i.test(topVideoTitle);
+}
+
+function buildOpportunityAnalyticsDigest(
+  analytics: ChannelAnalytics,
+  topHooks: HookSummary[]
+): string {
+  const topVideos = [...analytics.videos]
+    .sort((left, right) => right.viewCount - left.viewCount)
+    .slice(0, 5)
+    .map((video) => `- ${video.title} (${video.viewCount.toLocaleString()} views)`)
+    .join("\n");
+  const topClusters = analytics.topicClusters
+    .slice(0, 5)
+    .map(
+      (cluster) =>
+        `- ${cluster.topic} (${Math.round(cluster.averageViews).toLocaleString()} avg views, ${cluster.videoCount} videos)`
+    )
+    .join("\n");
+  const hooks = topHooks
+    .slice(0, 3)
+    .map((hook) => `- ${hook.videoTitle}: ${buildSnippet(hook.text, 140)}`)
+    .join("\n");
+
+  return [
+    `Channel: ${analytics.channel.channel_name}`,
+    `Average views: ${Math.round(analytics.averageViews).toLocaleString()}`,
+    `Median views: ${Math.round(analytics.medianViews).toLocaleString()}`,
+    `Best duration: ${analytics.stats.bestDuration?.label ?? "Unknown"}`,
+    topVideos ? `Top videos:\n${topVideos}` : "",
+    topClusters ? `Top recurring lanes:\n${topClusters}` : "",
+    hooks ? `High-performing hook references:\n${hooks}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+async function maybeCurateOpportunitiesWithAi(
+  analytics: ChannelAnalytics,
+  candidates: OpportunityCandidate[],
+  topHooks: HookSummary[],
+  env: Env
+): Promise<OpportunityCandidate[] | null> {
+  if (!env.AI || candidates.length < 2) return null;
+
+  try {
+    const runOpportunityModel = env.AI.run as (
+      modelName: string,
+      inputs: Record<string, unknown>,
+    ) => Promise<unknown>;
+
+    const response = await runOpportunityModel(
+      env.SCRIPT_LAB_TEXT_MODEL?.trim() || DEFAULT_SCRIPT_LAB_TEXT_MODEL,
+      {
+        messages: [
+          {
+            role: "system",
+            content: [
+              "You are a YouTube content strategist for a contrarian business-buying and wealth channel.",
+              "Choose the best next video opportunities for a team that needs ideas worth making, not generic search bait.",
+              "Only select ideas that are clearly about business models, ownership, acquisition, cash flow, market structure, pricing power, franchising, wealth strategy, or operator edge.",
+              "Do not choose politics, geopolitics, culture-war, history, conspiracy, or generic brand-explainer ideas unless the business model and money angle are explicit.",
+              "Prefer concrete ideas a strategist could greenlight this week.",
+              "If a candidate topic label is abstract, rewrite it into a concrete viewer-facing idea that names the business model, decision, or money lesson.",
+              "Return JSON only in the shape {\"items\":[...]} and only use the candidate IDs provided.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: [
+              `Channel strategy context:\n${buildOpportunityAnalyticsDigest(analytics, topHooks)}`,
+              "Pick the best 3 opportunities from the candidate list below.",
+              "For each item, rewrite the title and angle so it feels specific, monetizable, and clearly useful to the channel audience.",
+              "Avoid vague 'real reason' framing unless the new title makes the business lesson explicit.",
+              "Do not echo abstract labels like 'Amazingly Low Failure' back to the user unless you translate them into a concrete business-buying angle.",
+              "Return fields: id, title, topic, angle, rationale, whyNow, recommendedHook, recommendedFormat, recommendedDuration, thumbnailDirection, packageSeedTitle.",
+              `Candidates:\n${candidates.map((candidate) => buildOpportunityCandidateDigest(candidate)).join("\n\n")}`,
+            ].join("\n\n"),
+          },
+        ],
+        max_tokens: 1600,
+        temperature: 0.35,
+      }
+    );
+
+    const content = extractAiTextResponse(response);
+    if (!content) return null;
+
+    const curated = parseOpportunityCurationResults(content);
+    if (!curated?.length) return null;
+
+    const candidateMap = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+
+    return curated
+      .map((item, index) => {
+        const source = candidateMap.get(item.id);
+        if (!source) return null;
+
+        return {
+          ...source,
+          title: item.title || source.title,
+          topic: item.topic || source.topic,
+          angle: item.angle || source.angle,
+          rationale: item.rationale || source.rationale,
+          whyNow: item.whyNow || source.whyNow,
+          recommendedHook: item.recommendedHook || source.recommendedHook,
+          recommendedFormat: item.recommendedFormat || source.recommendedFormat,
+          recommendedDuration: item.recommendedDuration || source.recommendedDuration,
+          thumbnailDirection: item.thumbnailDirection || source.thumbnailDirection,
+          score: clampOpportunityScore(source.score + Math.max(0, 6 - index * 2)),
+          packageSeed: {
+            title: item.packageSeedTitle || source.packageSeed.title,
+            topic: item.topic || source.packageSeed.topic,
+          },
+        };
+      })
+      .filter((item): item is OpportunityCandidate => Boolean(item));
+  } catch (error) {
+    console.error("workers-ai-opportunity-curation-fallback", {
+      error: error instanceof Error ? error.message : String(error),
+      channel: analytics.channel.slug,
+    });
+    return null;
+  }
+}
+
 function buildOpportunityMetricLabel(views: number, videoCount?: number): string {
   const base = `${Math.round(views).toLocaleString()} avg views`;
   if (!videoCount) return base;
@@ -2630,6 +2883,7 @@ function buildRepeatWinnerCandidate(
 ): OpportunityCandidate {
   const exemplarVideo = findAnalyticsVideo(analytics, cluster.topVideoYoutubeId);
   const topicTokens = tokenizeOpportunityText(cluster.topic);
+  const failureRateLane = isFailureRateLane(cluster.topic, cluster.topVideoTitle);
   const score = clampOpportunityScore(
     58 +
       Math.min(18, (cluster.averageViews / Math.max(analytics.averageViews, 1)) * 14) +
@@ -2638,15 +2892,35 @@ function buildRepeatWinnerCandidate(
       getOpportunityPriorityBoost(topicTokens)
   );
 
+  const title = failureRateLane
+    ? "The boring businesses least likely to fail in 2026"
+    : `Double down on ${cluster.topic}`;
+  const topic = failureRateLane ? "low-failure small businesses" : cluster.topic;
+  const angle = failureRateLane
+    ? "Use the proven low-failure lane to answer a sharper question: which boring business models give an owner the best mix of survivability, simplicity, and pricing power?"
+    : `Take ${cluster.topic} out of generic listicle mode and frame it as a concrete operator play with one decisive business lesson.`;
+  const rationale = failureRateLane
+    ? `${analytics.channel.channel_name} already has proof that viewers care about low-failure businesses. The upgrade is to stop sounding like a roundup and make a buyer-style case for one or two specific business models.`
+    : `${analytics.channel.channel_name} already wins in this lane. The goal is not to repeat the same topic, but to narrow it into a sharper business-buying angle.`;
+  const whyNow = failureRateLane
+    ? "Founders are exhausted by hype-cycle ideas. A low-failure, cash-flow-first angle feels timely because it gives the audience a practical path into ownership instead of another speculative story."
+    : `This is already proven on the channel, so it gives you the safest path to a new winner while still feeling fresh if the framing gets more specific.`;
+  const recommendedHook = failureRateLane
+    ? "If you wanted the safest path into business ownership right now, you would not start with the sexy businesses. You would start with the boring ones that almost never die."
+    : `${cluster.topic} looks crowded until you realize the real money is in the part almost nobody breaks down clearly.`;
+  const packageSeedTitle = failureRateLane
+    ? "The small businesses least likely to fail in 2026"
+    : `The smartest ${cluster.topic.toLowerCase()} play in 2026`;
+
   return {
     id: `${analytics.channel.slug}-repeat-${slugifyValue(cluster.topic)}`,
     opportunityType: "repeat_winner",
-    title: `Double down on ${cluster.topic}`,
-    topic: cluster.topic,
-    angle: `Take ${cluster.topic} out of generic listicle mode and frame it as a concrete operator play with one decisive business lesson.`,
-    rationale: `${analytics.channel.channel_name} already wins in this lane. The goal is not to repeat the same topic, but to narrow it into a sharper business-buying angle.`,
-    whyNow: `This is already proven on the channel, so it gives you the safest path to a new winner while still feeling fresh if the framing gets more specific.`,
-    recommendedHook: `${cluster.topic} looks crowded until you realize the real money is in the part almost nobody breaks down clearly.`,
+    title,
+    topic,
+    angle,
+    rationale,
+    whyNow,
+    recommendedHook,
     recommendedFormat: "Evidence-led explainer with operator examples",
     recommendedDuration: analytics.stats.bestDuration?.label ?? "12-18 min",
     thumbnailDirection: buildThumbnailDirection(exemplarVideo),
@@ -2673,8 +2947,8 @@ function buildRepeatWinnerCandidate(
     ],
     competitorEvidence: [],
     packageSeed: {
-      title: `The smartest ${cluster.topic.toLowerCase()} play in 2026`,
-      topic: cluster.topic,
+      title: packageSeedTitle,
+      topic,
     },
   };
 }
@@ -2834,7 +3108,7 @@ async function getChannelOpportunities(
         right.videoCount * 0.08;
       return rightScore - leftScore;
     })
-    .slice(0, 2)
+    .slice(0, 3)
     .map((cluster) => buildRepeatWinnerCandidate(analytics, cluster));
 
   const gapCandidates: OpportunityCandidate[] = [];
@@ -2875,6 +3149,7 @@ async function getChannelOpportunities(
       if (channelTopics.has(gap.topic.toLowerCase())) return false;
       const tokens = tokenizeOpportunityText(gap.topic);
       if (tokens.length === 0) return false;
+      if (hasBlockedOpportunityToken(tokens)) return false;
       return isBusinessAdjacentOpportunity(tokens);
     });
 
@@ -2887,13 +3162,19 @@ async function getChannelOpportunities(
     topHooks[0] ?? null
   );
 
-  const candidates = dedupeOpportunityCandidates(
+  const rankedCandidates = dedupeOpportunityCandidates(
     [
       ...repeatCandidates,
       ...gapCandidates,
       ...(contrarianCandidate ? [contrarianCandidate] : []),
     ].sort((left, right) => right.score - left.score)
-  ).slice(0, 5);
+  ).slice(0, 8);
+
+  const curatedCandidates =
+    (await maybeCurateOpportunitiesWithAi(analytics, rankedCandidates, topHooks, env)) ??
+    rankedCandidates;
+
+  const candidates = curatedCandidates.slice(0, 3);
 
   const response: ChannelOpportunitiesResponse = {
     channel: slug,
@@ -3589,16 +3870,32 @@ type ScriptLabAiGenerationResult = {
 };
 
 function buildScriptLabResearchDigest(researchItems: ScriptResearchItem[]): string {
-  return researchItems
-    .slice(0, 8)
-    .map((item, index) => {
-      const title = item.title ? `${item.title}: ` : "";
-      const excerpt = item.excerpt ? buildSnippet(item.excerpt, 220) : "";
-      const score = typeof item.score === "number" ? ` [score ${Math.round(item.score)}]` : "";
-      return `${index + 1}. [${item.itemType}] ${title}${excerpt}${score}`.trim();
+  const sections: Array<{ label: string; types: string[]; limit: number }> = [
+    { label: "Opportunity brief", types: ["opportunity_brief"], limit: 1 },
+    { label: "Channel proof", types: ["channel_evidence", "quote"], limit: 4 },
+    { label: "Competitor proof", types: ["competitor_evidence", "gap"], limit: 2 },
+    { label: "Hook references", types: ["hook"], limit: 3 },
+    { label: "Persona voice references", types: ["persona_style"], limit: 2 },
+  ];
+
+  const blocks = sections
+    .map((section) => {
+      const items = researchItems
+        .filter((item) => section.types.includes(item.itemType))
+        .slice(0, section.limit)
+        .map((item, index) => {
+          const title = item.title ? `${item.title}: ` : "";
+          const excerpt = item.excerpt ? buildSnippet(item.excerpt, 220) : "";
+          const score = typeof item.score === "number" ? ` [score ${Math.round(item.score)}]` : "";
+          return `${index + 1}. [${item.itemType}] ${title}${excerpt}${score}`.trim();
+        })
+        .filter(Boolean);
+
+      return items.length > 0 ? `## ${section.label}\n${items.join("\n")}` : null;
     })
-    .filter(Boolean)
-    .join("\n");
+    .filter((value): value is string => Boolean(value));
+
+  return blocks.join("\n\n");
 }
 
 function buildScriptLabPreviousOutputDigest(
@@ -3636,12 +3933,15 @@ function getScriptLabAiRequirements(step: ScriptLabStep, channelName: string): s
         "- Produce exactly 3 hook options.",
         "- Each hook should feel like a real YouTube opener for a contrarian business/wealth channel.",
         "- After the hooks, include a short section explaining why the winner should work and which proof point lands first.",
+        "- Name the concrete business model, operator move, or proof point from the evidence set instead of repeating an abstract opportunity label.",
+        "- Do not use the topic label itself as the main noun unless it is already concrete and viewer-facing.",
         `- Keep the voice direct, operator-first, and sharp for ${channelName}.`,
       ].join("\n");
     case "outline":
       return [
         "- Build a concise 6-part outline.",
         "- Make the proof stack specific; avoid generic filler sections.",
+        "- Name the actual businesses, examples, or operator decisions that should appear in each section.",
         "- The outline should create momentum toward a clear business lesson.",
       ].join("\n");
     case "script":
@@ -3649,18 +3949,22 @@ function getScriptLabAiRequirements(step: ScriptLabStep, channelName: string): s
         "- Write only the first 60-90 seconds.",
         "- Make it sound like a strong YouTube cold open, not an essay.",
         "- Use specific proof from the evidence set early.",
+        "- Ground the opening in a concrete business example or operator decision by the second paragraph.",
+        "- Do not keep repeating the opportunity/topic label if the evidence gives you more specific language.",
         "- Avoid generic motivational phrasing, broad platitudes, or template filler.",
       ].join("\n");
     case "director_notes":
       return [
         "- Write shot-by-shot notes for the opening minute.",
         "- Include pacing, cut style, text overlays, and what visual proof appears when.",
+        "- Tie each shot to a specific example or proof beat from the evidence set.",
         "- Keep it practical enough that an editor or producer could use it immediately.",
       ].join("\n");
     case "thumbnail_brief":
       return [
         "- Produce exactly 2 thumbnail concepts.",
         "- Each concept must include headline text (max 4 words), subject/framing, and why it should win.",
+        "- Make the concept about the concrete business lesson, not the abstract topic label.",
         "- Use previous channel winners as style references, not as copies.",
       ].join("\n");
     default:
@@ -3718,6 +4022,7 @@ async function maybeGenerateScriptLabStepWithAi(
     "You are a senior YouTube strategist and scriptwriter for business, wealth, and business-buying content.",
     "Your job is to turn channel evidence into a specific, publishable deliverable.",
     "Be concrete, opinionated, and useful.",
+    "If the selected opportunity label is abstract, translate it into a concrete viewer-facing idea before you write.",
     "Avoid generic filler, vague hype, or obvious AI phrasing.",
     "Return markdown only with no code fences and no preamble.",
   ].join(" ");
