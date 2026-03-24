@@ -1352,8 +1352,33 @@ export default function ScriptLabProjectPage() {
     );
   }
 
-  if (!projectResponse.data?.project) {
+  if (projectResponse.isLoading && !projectResponse.data?.project) {
     return <ScriptLabProjectLoadingState slug={slug} projectId={projectId} />;
+  }
+
+  if (!projectResponse.data?.project) {
+    return (
+      <main className="pb-10">
+        <Breadcrumb slug={slug} projectId={projectId} step="research" />
+        <div className="flex min-h-[calc(100vh-145px)]">
+          <ScriptLabWorkflowSidebar activeStep="research" channelSlug={slug} projectId={projectId} />
+          <section className="flex-1 px-6 py-12 md:px-10 xl:px-12">
+            <ErrorState
+              title="Script project payload was empty"
+              description="The app received an incomplete response for this Script Lab project. Reload the page or return to the project list."
+              action={
+                <div className="flex items-center gap-3">
+                  <Button onClick={() => projectResponse.refetch()}>Retry</Button>
+                  <Button asChild variant="outline">
+                    <Link href={`/app/channels/${slug}/script-lab/projects`}>Back to Projects</Link>
+                  </Button>
+                </div>
+              }
+            />
+          </section>
+        </div>
+      </main>
+    );
   }
 
   const project = projectResponse.data.project;

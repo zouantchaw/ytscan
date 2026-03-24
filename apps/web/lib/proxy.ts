@@ -70,6 +70,17 @@ export async function proxyApiPath(request: NextRequest, targetPath: string) {
 }
 
 export async function proxyJsonApiPath(request: NextRequest, targetPath: string) {
+  const { payload, status } = await fetchJsonApiPayload(request, targetPath);
+
+  return Response.json(payload, {
+    status,
+    headers: {
+      "cache-control": "no-store",
+    },
+  });
+}
+
+export async function fetchJsonApiPayload(request: NextRequest, targetPath: string) {
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.set("x-forwarded-host", request.nextUrl.host);
@@ -108,45 +119,30 @@ export async function proxyJsonApiPath(request: NextRequest, targetPath: string)
     : null;
 
   if (response.ok && responseText === "") {
-    return Response.json(
-      {
+    return {
+      payload: {
         error: `Upstream JSON API returned an empty response for ${targetPath}.`,
       },
-      {
-        status: 502,
-        headers: {
-          "cache-control": "no-store",
-        },
-      }
-    );
+      status: 502,
+    };
   }
 
   if (responseText && !payload && isJsonResponse) {
-    return Response.json(
-      {
+    return {
+      payload: {
         error: `Upstream JSON API returned invalid JSON for ${targetPath}.`,
       },
-      {
-        status: 502,
-        headers: {
-          "cache-control": "no-store",
-        },
-      }
-    );
+      status: 502,
+    };
   }
 
   if (response.ok && responseText && !isJsonResponse) {
-    return Response.json(
-      {
+    return {
+      payload: {
         error: `Upstream JSON API returned a non-JSON response for ${targetPath}.`,
       },
-      {
-        status: 502,
-        headers: {
-          "cache-control": "no-store",
-        },
-      }
-    );
+      status: 502,
+    };
   }
 
   const normalizedPayload =
@@ -157,10 +153,8 @@ export async function proxyJsonApiPath(request: NextRequest, targetPath: string)
         }
       : null);
 
-  return Response.json(normalizedPayload, {
+  return {
+    payload: normalizedPayload,
     status: response.ok ? response.status : response.status || 502,
-    headers: {
-      "cache-control": "no-store",
-    },
-  });
+  };
 }
