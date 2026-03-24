@@ -116,6 +116,17 @@ function stripCaptionNoise(value: string): string {
     .trim();
 }
 
+function stripSubtitleArtifacts(value: string): string {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\bwww\.\S+/gi, " ")
+    .replace(/\b(?:subtitles|captions)\s+by\b[^.!\n]*/gi, " ")
+    .replace(/>>+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function dedupeRepeatedPhrases(text: string): string {
   const words = normalizeWhitespace(text).split(" ").filter(Boolean);
   if (words.length === 0) return "";
@@ -150,8 +161,30 @@ function dedupeRepeatedPhrases(text: string): string {
   return normalizeWhitespace(result.join(" "));
 }
 
+function collapseRepeatedWords(text: string): string {
+  const words = normalizeWhitespace(text).split(" ").filter(Boolean);
+  if (words.length === 0) return "";
+
+  const result: string[] = [];
+  for (const word of words) {
+    const previous = result.at(-1);
+    if (
+      previous &&
+      previous.toLowerCase() === word.toLowerCase() &&
+      word.length >= 3
+    ) {
+      continue;
+    }
+    result.push(word);
+  }
+
+  return normalizeWhitespace(result.join(" "));
+}
+
 function sanitizeTranscriptText(value: string): string {
-  return dedupeRepeatedPhrases(stripCaptionNoise(value));
+  return collapseRepeatedWords(
+    dedupeRepeatedPhrases(stripCaptionNoise(stripSubtitleArtifacts(value)))
+  );
 }
 
 function timestampToSeconds(value: string): number {
@@ -188,6 +221,24 @@ function dedupeRollingCaptions(entries: SrtEntry[]): Segment[] {
   const segments: Segment[] = [];
   let previous = "";
 
+  const extractOverlapDelta = (previousText: string, currentText: string): string | null => {
+    const previousWords = splitWords(previousText.toLowerCase());
+    const currentWords = splitWords(currentText);
+    const currentLowerWords = splitWords(currentText.toLowerCase());
+    const maxOverlap = Math.min(previousWords.length, currentWords.length, 12);
+
+    for (let size = maxOverlap; size >= 3; size -= 1) {
+      const previousSuffix = previousWords.slice(-size).join(" ");
+      const currentPrefix = currentLowerWords.slice(0, size).join(" ");
+      if (previousSuffix !== currentPrefix) continue;
+
+      const delta = normalizeWhitespace(currentWords.slice(size).join(" "));
+      return delta || null;
+    }
+
+    return null;
+  };
+
   for (const entry of entries) {
     const text = normalizeWhitespace(entry.text);
     if (!text) continue;
@@ -205,6 +256,17 @@ function dedupeRollingCaptions(entries: SrtEntry[]): Segment[] {
           text: delta,
         });
       }
+      previous = text;
+      continue;
+    }
+
+    const overlapDelta = previous ? extractOverlapDelta(previous, text) : null;
+    if (overlapDelta) {
+      segments.push({
+        startTime: entry.startTime,
+        endTime: entry.endTime,
+        text: overlapDelta,
+      });
       previous = text;
       continue;
     }

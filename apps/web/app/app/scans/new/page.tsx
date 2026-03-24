@@ -129,8 +129,8 @@ export default function NewScanPage() {
               Channel Already Exists
             </h1>
             <p className="text-[16px] leading-8 text-muted-foreground">
-              {duplicateChannel.channelName} was scanned and is already available in your workspace.
-              You can open the existing channel or rescan to refresh the data.
+              {duplicateChannel.channelName} is already in your library. Open the existing
+              dashboard or run a fresh scan to update its historical data.
             </p>
           </div>
 
@@ -151,7 +151,7 @@ export default function NewScanPage() {
 
           <div className="flex flex-wrap items-center justify-center gap-3">
             <Button asChild size="lg">
-              <Link href={`/app/channels/${duplicateChannel.slug}`}>Open Existing Channel</Link>
+              <Link href={`/app/channels/${duplicateChannel.slug}`}>Open Dashboard</Link>
             </Button>
             <Button variant="outline" size="lg" onClick={() => queueScan(channelUrl)} disabled={isPending}>
               {isPending ? "Queueing rescan..." : "Rescan Channel"}
@@ -171,8 +171,8 @@ export default function NewScanPage() {
             Scan a new channel
           </h1>
           <p className="max-w-[760px] text-[15px] leading-7 text-muted-foreground">
-            Paste a YouTube channel URL and queue a fresh ingest job for metadata, transcripts,
-            thumbnails, and visual analysis.
+            Paste a YouTube channel URL to import the full historical archive: metadata,
+            transcripts, thumbnails, and the performance context behind every upload.
           </p>
         </div>
 
@@ -206,9 +206,9 @@ export default function NewScanPage() {
             <AppPanel className="space-y-3 px-5 py-5">
               <p className="text-[14px] font-semibold text-foreground">What gets ingested</p>
               <ul className="space-y-2 text-[14px] leading-6 text-muted-foreground">
-                <li>Metadata and performance history</li>
-                <li>Full transcript corpus with timestamps</li>
-                <li>Thumbnail images, analysis, and hook cues</li>
+                <li>Video metadata, publish dates, and performance history</li>
+                <li>Full transcript archive with timestamps</li>
+                <li>Thumbnail images and descriptive visual analysis</li>
               </ul>
             </AppPanel>
             <AppPanel className="space-y-3 px-5 py-5">

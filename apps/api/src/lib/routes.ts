@@ -71,6 +71,7 @@ type ChannelRow = {
 
 type SearchFilters = {
   channelSlug: string;
+  youtubeId: string | null;
   minViews: number | null;
   performanceTier: string | null;
   dateFrom: string | null;
@@ -525,6 +526,7 @@ const SEARCH_SELECT = `
   tc.end_time,
   v.youtube_id,
   v.title,
+  v.description,
   v.upload_date,
   v.view_count,
   v.performance_tier,
@@ -2224,6 +2226,10 @@ function parseTags(rawValue: unknown): string[] {
 function parseSearchFilters(url: URL, defaultChannelSlug: string | undefined): SearchFilters {
   return {
     channelSlug: url.searchParams.get("channel")?.trim() || defaultChannelSlug || "",
+    youtubeId:
+      url.searchParams.get("youtubeId")?.trim() ??
+      url.searchParams.get("youtube_id")?.trim() ??
+      null,
     minViews: parseInteger(url.searchParams.get("minViews") ?? url.searchParams.get("min_views")),
     performanceTier:
       url.searchParams.get("performanceTier")?.trim() ??
@@ -2259,8 +2265,74 @@ function buildTextSearchTerms(query: string): string[] {
 
   if (!normalized) return [];
 
-  const terms = [...new Set(normalized.split(" ").filter((term) => term.length >= 4))].slice(0, 6);
-  return terms.length > 0 ? terms : [normalized.slice(0, 64)];
+  const terms = [...new Set(normalized.split(" ").filter((term) => term.length >= 3))].slice(0, 8);
+  const phrase = normalized.includes(" ") ? normalized.slice(0, 96) : null;
+  const rankedTerms = phrase ? [phrase, ...terms] : terms;
+  return rankedTerms.length > 0 ? rankedTerms : [normalized.slice(0, 64)];
+}
+
+function computeTextMatchScore(
+  value: string,
+  normalizedQuery: string,
+  terms: string[]
+): number {
+  const lowerValue = value.toLowerCase();
+  if (!lowerValue) return 0;
+
+  let score = 0;
+  if (normalizedQuery && lowerValue.includes(normalizedQuery)) {
+    score += 12;
+  }
+
+  for (const term of terms) {
+    if (lowerValue.includes(term)) {
+      score += term.includes(" ") ? 8 : Math.min(5, Math.max(2, term.length - 1));
+    }
+  }
+
+  return score;
+}
+
+function computeSearchResultScore(
+  row: Record<string, unknown>,
+  normalizedQuery: string,
+  terms: string[]
+): number {
+  const chunkText = String(row.chunk_text ?? "");
+  const title = String(row.title ?? "");
+  const description = String(row.description ?? "");
+
+  return (
+    computeTextMatchScore(title, normalizedQuery, terms) * 2 +
+    computeTextMatchScore(chunkText, normalizedQuery, terms) +
+    computeTextMatchScore(description, normalizedQuery, terms) * 0.5
+  );
+}
+
+function matchesDurationBucket(durationSec: number, durationBucket: string | null): boolean {
+  if (!durationBucket) return true;
+
+  if (durationBucket === "0-8") return durationSec < 8 * 60;
+  if (durationBucket === "8-18") return durationSec >= 8 * 60 && durationSec < 18 * 60;
+  if (durationBucket === "18-30") return durationSec >= 18 * 60 && durationSec < 30 * 60;
+  if (durationBucket === "30+") return durationSec >= 30 * 60;
+  return true;
+}
+
+function computeArchiveVideoScore(video: AnalyticsVideo, query: string | null): number {
+  if (!query) return 0;
+
+  const normalizedQuery = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const terms = buildTextSearchTerms(query);
+
+  if (!normalizedQuery || terms.length === 0) return 0;
+
+  const haystack = [video.title, video.description, video.tags.join(" ")].join(" ");
+  return computeTextMatchScore(haystack, normalizedQuery, terms);
 }
 
 function buildSearchFilterClause(
@@ -2273,6 +2345,11 @@ function buildSearchFilterClause(
   if (filters.channelSlug) {
     clauses.push("c.slug = ?");
     binds.push(filters.channelSlug);
+  }
+
+  if (filters.youtubeId) {
+    clauses.push("v.youtube_id = ?");
+    binds.push(filters.youtubeId);
   }
 
   if (filters.minViews !== null) {
@@ -2554,20 +2631,54 @@ async function getChannelVideos(
   const analytics = await getChannelAnalytics(slug, context, env);
   if (!analytics) return jsonResponse({ error: "Channel not found" }, 404);
 
-  const sort = url.searchParams.get("sort") === "views" ? "views" : "recent";
-  const limit = clampLimit(url.searchParams.get("limit"), 30, 250);
-  const items = [...analytics.videos]
+  const sortParam = url.searchParams.get("sort")?.trim();
+  const sort: ChannelVideosResponse["sort"] =
+    sortParam === "views" || sortParam === "engagement" ? sortParam : "recent";
+  const limit = clampLimit(url.searchParams.get("limit"), 30, 500);
+  const query = url.searchParams.get("q")?.trim() ?? null;
+  const performanceTier =
+    url.searchParams.get("performanceTier")?.trim() ??
+    url.searchParams.get("performance_tier")?.trim() ??
+    null;
+  const durationBucket =
+    url.searchParams.get("durationBucket")?.trim() ??
+    url.searchParams.get("duration_bucket")?.trim() ??
+    null;
+  const minViews = parseInteger(url.searchParams.get("minViews") ?? url.searchParams.get("min_views"));
+
+  const filteredVideos = analytics.videos
+    .map((video) => ({
+      queryScore: computeArchiveVideoScore(video, query),
+      video,
+    }))
+    .filter(({ video, queryScore }) => {
+      if (performanceTier && video.performanceTier !== performanceTier) return false;
+      if (minViews !== null && video.viewCount < minViews) return false;
+      if (!matchesDurationBucket(video.durationSec, durationBucket)) return false;
+      if (query && queryScore <= 0) return false;
+      return true;
+    });
+
+  const items = filteredVideos
     .sort((left, right) => {
-      if (sort === "views" && right.viewCount !== left.viewCount) {
-        return right.viewCount - left.viewCount;
+      if (query && right.queryScore !== left.queryScore) {
+        return right.queryScore - left.queryScore;
       }
 
-      const dateDelta = right.uploadDate.localeCompare(left.uploadDate);
+      if (sort === "views" && right.video.viewCount !== left.video.viewCount) {
+        return right.video.viewCount - left.video.viewCount;
+      }
+
+      if (sort === "engagement" && right.video.engagementRate !== left.video.engagementRate) {
+        return right.video.engagementRate - left.video.engagementRate;
+      }
+
+      const dateDelta = right.video.uploadDate.localeCompare(left.video.uploadDate);
       if (dateDelta !== 0) return dateDelta;
-      return right.viewCount - left.viewCount;
+      return right.video.viewCount - left.video.viewCount;
     })
     .slice(0, limit)
-    .map((video) => ({
+    .map(({ video }) => ({
       youtubeId: video.youtubeId,
       title: video.title,
       uploadDate: video.uploadDate,
@@ -2575,6 +2686,9 @@ async function getChannelVideos(
       viewCount: video.viewCount,
       likeCount: video.likeCount,
       commentCount: video.commentCount,
+      description: video.description,
+      tags: video.tags,
+      engagementRate: video.engagementRate,
       performanceTier: video.performanceTier,
       videoUrl: video.videoUrl,
       thumbnailAnalysis: video.thumbnailAnalysis,
@@ -2584,7 +2698,32 @@ async function getChannelVideos(
     channel: slug,
     items,
     count: items.length,
+    totalCount: analytics.videos.length,
     sort,
+    filters: {
+      query,
+      performanceTier,
+      durationBucket,
+      minViews,
+    },
+    stats: {
+      totalVideos: filteredVideos.length,
+      totalViews: filteredVideos.reduce((sum, { video }) => sum + video.viewCount, 0),
+      averageViews: Math.round(
+        filteredVideos.reduce((sum, { video }) => sum + video.viewCount, 0) /
+          Math.max(filteredVideos.length, 1)
+      ),
+      averageDurationSec: Math.round(
+        filteredVideos.reduce((sum, { video }) => sum + video.durationSec, 0) /
+          Math.max(filteredVideos.length, 1)
+      ),
+      averageEngagementRate: Number(
+        (
+          filteredVideos.reduce((sum, { video }) => sum + video.engagementRate, 0) /
+          Math.max(filteredVideos.length, 1)
+        ).toFixed(4)
+      ),
+    },
   };
 
   return jsonResponse(response);
@@ -4826,6 +4965,7 @@ async function rebuildScriptResearch(
 
   const searchFilters: SearchFilters = {
     channelSlug: project.channel_slug,
+    youtubeId: null,
     minViews: null,
     performanceTier: null,
     dateFrom: null,
@@ -6030,6 +6170,11 @@ async function runTextSearch(
   context: RequestContext,
   env: Env
 ): Promise<SearchResultItem[]> {
+  const normalizedQuery = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const searchTerms = buildTextSearchTerms(query);
   if (searchTerms.length === 0) return [];
 
@@ -6055,10 +6200,23 @@ async function runTextSearch(
   `;
 
   const { results = [] } = await env.DB.prepare(sql)
-    .bind(...likeBinds, ...binds, limit)
+    .bind(...likeBinds, ...binds, Math.min(limit * 10, 160))
     .all<Record<string, unknown>>();
 
-  return results.map((row) => toSearchResultItem(row));
+  return results
+    .map((row) => ({
+      row,
+      score: computeSearchResultScore(row, normalizedQuery, searchTerms),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      const viewDelta = Number(right.row.view_count ?? 0) - Number(left.row.view_count ?? 0);
+      if (viewDelta !== 0) return viewDelta;
+      return Number(left.row.start_time ?? 0) - Number(right.row.start_time ?? 0);
+    })
+    .slice(0, limit)
+    .map(({ row, score }) => toSearchResultItem(row, score));
 }
 
 async function runSemanticSearch(
@@ -6203,6 +6361,9 @@ function buildTopVideos(videos: AnalyticsVideo[], limit: number): VideoSummary[]
       viewCount: video.viewCount,
       likeCount: video.likeCount,
       commentCount: video.commentCount,
+      description: video.description,
+      tags: video.tags,
+      engagementRate: video.engagementRate,
       performanceTier: video.performanceTier,
       videoUrl: video.videoUrl,
       thumbnailAnalysis: video.thumbnailAnalysis,

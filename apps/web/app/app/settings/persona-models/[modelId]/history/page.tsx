@@ -5,6 +5,6 @@ export default async function LegacyPersonaModelHistorySettingsPage({
 }: {
   params: Promise<{ modelId: string }>;
 }) {
-  const { modelId } = await params;
-  redirect(`/app/persona/${modelId}/history`);
+  await params;
+  redirect("/app/channels");
 }

@@ -1,19 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useParams, usePathname } from "next/navigation";
-import type { ChannelSummary, MeResponse } from "@ytscan/core";
+import type { ChannelSummary } from "@ytscan/core";
 import {
   ChevronDown,
-  FolderKanban,
   LayoutGrid,
   Menu,
-  Search,
+  Plus,
   Settings,
-  Sparkles,
-  UserSquare2,
-  UsersRound,
 } from "lucide-react";
 import { AppLogo } from "@/components/brand/app-logo";
 import { ChannelAvatar } from "@/components/app/app-ui";
@@ -52,55 +48,13 @@ type SidebarItem = {
   bottom?: boolean;
 };
 
-const LAST_CHANNEL_SLUG_KEY = "ytscan:last-channel-slug";
-
 const sidebarItems: SidebarItem[] = [
   {
-    key: "opportunities",
-    label: "Opportunities",
-    icon: Sparkles,
-    href: (channelSlug) =>
-      channelSlug ? `/app/channels/${channelSlug}/opportunities` : "/app/channels",
-    active: (pathname) => pathname.includes("/opportunities"),
-  },
-  {
-    key: "analytics",
-    label: "Analytics",
+    key: "channels",
+    label: "Channels",
     icon: LayoutGrid,
-    href: (channelSlug) => (channelSlug ? `/app/channels/${channelSlug}` : "/app/channels"),
-    active: (pathname) =>
-      /^\/app\/channels\/[^/]+$/.test(pathname) || pathname === "/app/channels",
-  },
-  {
-    key: "search",
-    label: "Search",
-    icon: Search,
-    href: (channelSlug) =>
-      channelSlug ? `/app/channels/${channelSlug}/search` : "/app/channels",
-    active: (pathname) => pathname.includes("/search"),
-  },
-  {
-    key: "script-lab",
-    label: "Script Lab",
-    icon: FolderKanban,
-    href: (channelSlug) =>
-      channelSlug ? `/app/channels/${channelSlug}/script-lab/projects` : "/app/channels",
-    active: (pathname) => pathname.includes("/script-lab"),
-  },
-  {
-    key: "persona",
-    label: "Persona",
-    icon: UserSquare2,
-    href: () => "/app/persona",
-    active: (pathname) => pathname.startsWith("/app/persona") || pathname.includes("/persona-models"),
-  },
-  {
-    key: "compare",
-    label: "Compare",
-    icon: UsersRound,
-    href: (channelSlug) =>
-      channelSlug ? `/app/channels/${channelSlug}/compare` : "/app/channels",
-    active: (pathname) => pathname.includes("/compare"),
+    href: () => "/app/channels",
+    active: (pathname) => pathname.startsWith("/app/channels") || pathname.startsWith("/app/scans"),
   },
   {
     key: "settings",
@@ -112,26 +66,9 @@ const sidebarItems: SidebarItem[] = [
   },
 ];
 
-function resolvePreferredChannelSlug(
-  pathname: string,
-  params: Record<string, string | string[] | undefined>,
-  channels: ChannelSummary[],
-  rememberedChannelSlug: string | null
-) {
+function resolvePreferredChannelSlug(params: Record<string, string | string[] | undefined>) {
   const routeSlug = params.slug;
   if (typeof routeSlug === "string") return routeSlug;
-
-  if (rememberedChannelSlug && channels.some((channel) => channel.slug === rememberedChannelSlug)) {
-    return rememberedChannelSlug;
-  }
-
-  if (channels.length === 1) {
-    return channels[0]?.slug ?? null;
-  }
-
-  if (pathname.startsWith("/app/channels/") || pathname.startsWith("/app/scans")) {
-    return null;
-  }
 
   return null;
 }
@@ -162,21 +99,18 @@ function SidebarLink({
   );
 }
 
-function WorkspaceChannelSwitcher({
-  workspaceName,
+function ChannelLibrarySwitcher({
   channels,
   activeChannelSlug,
 }: {
-  workspaceName: string;
   channels: ChannelSummary[];
   activeChannelSlug: string | null;
 }) {
   const activeChannel =
     channels.find((channel) => channel.slug === activeChannelSlug) ?? null;
   const channelCountLabel = `${channels.length} channel${channels.length === 1 ? "" : "s"}`;
-  const meta = activeChannel
-    ? `${activeChannel.channelName} selected · ${channelCountLabel}`
-    : channelCountLabel;
+  const title = activeChannel?.channelName ?? "Channel Library";
+  const meta = activeChannel ? `${channelCountLabel} scanned` : channelCountLabel;
 
   return (
     <DropdownMenu>
@@ -185,9 +119,12 @@ function WorkspaceChannelSwitcher({
           type="button"
           className="flex w-full items-center gap-3 rounded-[12px] border border-border bg-card px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(26_26_24_/_0.04)] transition-colors hover:bg-secondary"
         >
-          <ChannelAvatar channelName={workspaceName} />
+          <ChannelAvatar
+            channelName={activeChannel?.channelName ?? "Channel Library"}
+            channelSlug={activeChannel?.slug ?? null}
+          />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[14px] font-medium text-foreground">{workspaceName}</p>
+            <p className="truncate text-[14px] font-medium text-foreground">{title}</p>
             <p className="truncate text-[12px] text-muted-foreground">{meta}</p>
           </div>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -195,12 +132,12 @@ function WorkspaceChannelSwitcher({
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-72 rounded-[12px] border border-border bg-card p-2 shadow-[0_10px_40px_rgb(26_26_24_/_0.12)]">
         <DropdownMenuLabel className="px-2 pb-2 text-[12px] uppercase tracking-[0.08em] text-muted-foreground">
-          Studio Channels
+          Scanned Channels
         </DropdownMenuLabel>
         {channels.length ? (
           channels.map((channel) => (
             <DropdownMenuItem asChild key={channel.slug} className="rounded-[10px] px-3 py-2.5">
-              <Link href={`/app/channels/${channel.slug}/opportunities`} className="flex items-center gap-3">
+              <Link href={`/app/channels/${channel.slug}`} className="flex items-center gap-3">
                 <ChannelAvatar channelName={channel.channelName} channelSlug={channel.slug} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-medium text-foreground">
@@ -219,13 +156,13 @@ function WorkspaceChannelSwitcher({
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild className="rounded-[10px] px-3 py-2.5">
           <Link href="/app/channels" className="flex items-center gap-3">
-            <FolderKanban className="size-4 text-muted-foreground" />
-            <span className="text-[14px] font-medium text-foreground">View all channels</span>
+            <LayoutGrid className="size-4 text-muted-foreground" />
+            <span className="text-[14px] font-medium text-foreground">Open channel library</span>
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild className="rounded-[10px] px-3 py-2.5">
           <Link href="/app/scans/new" className="flex items-center gap-3">
-            <Sparkles className="size-4 text-primary" />
+            <Plus className="size-4 text-primary" />
             <span className="text-[14px] font-medium text-foreground">Scan new channel</span>
           </Link>
         </DropdownMenuItem>
@@ -236,12 +173,10 @@ function WorkspaceChannelSwitcher({
 
 function SidebarContent({
   pathname,
-  workspaceName,
   channels,
   activeChannelSlug,
 }: {
   pathname: string;
-  workspaceName: string;
   channels: ChannelSummary[];
   activeChannelSlug: string | null;
 }) {
@@ -252,11 +187,16 @@ function SidebarContent({
     <div className="flex h-full min-h-0 flex-col gap-5">
       <div className="grid shrink-0 gap-5">
         <AppLogo href="/app/channels" size="sm" />
-        <WorkspaceChannelSwitcher
-          workspaceName={workspaceName}
+        <ChannelLibrarySwitcher
           channels={channels}
           activeChannelSlug={activeChannelSlug}
         />
+        <Button asChild className="justify-start">
+          <Link href="/app/scans/new">
+            <Plus className="size-4" />
+            Scan Channel
+          </Link>
+        </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <nav className="grid gap-1">
@@ -286,12 +226,10 @@ function SidebarContent({
 
 function AccountMenu({
   initials,
-  workspaceName,
   userName,
   userEmail,
 }: {
   initials: string;
-  workspaceName: string;
   userName: string;
   userEmail: string;
 }) {
@@ -318,7 +256,7 @@ function AccountMenu({
           <Link href="/app/settings/account" className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[14px] font-medium text-foreground">Settings</p>
-              <p className="text-[12px] text-muted-foreground">{workspaceName}</p>
+              <p className="text-[12px] text-muted-foreground">Profile and preferences</p>
             </div>
             <Settings className="size-4 text-muted-foreground" />
           </Link>
@@ -341,31 +279,15 @@ export function AuthenticatedAppShell({
 }) {
   const pathname = usePathname();
   const params = useParams<Record<string, string | string[] | undefined>>();
-  const [rememberedChannelSlug] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return window.localStorage.getItem(LAST_CHANNEL_SLUG_KEY);
-  });
   const session = authClient.useSession();
-  const me = useBackendQuery<MeResponse>("/me");
   const channels = useBackendQuery<ChannelCollectionResponse>("/channels");
   const initials = initialsFromName(session.data?.user.name ?? "YTScan User");
   const items = useMemo(() => channels.data?.items ?? [], [channels.data?.items]);
 
-  useEffect(() => {
-    const routeSlug = params.slug;
-    if (typeof routeSlug !== "string") return;
-    if (!items.some((channel) => channel.slug === routeSlug)) return;
-
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(LAST_CHANNEL_SLUG_KEY, routeSlug);
-    }
-  }, [items, params.slug]);
-
   const activeChannelSlug = useMemo(
-    () => resolvePreferredChannelSlug(pathname, params, items, rememberedChannelSlug),
-    [items, params, pathname, rememberedChannelSlug]
+    () => resolvePreferredChannelSlug(params),
+    [params]
   );
-  const workspaceName = me.data?.workspace.name ?? "Your Workspace";
   const userName = session.data?.user.name ?? "YTScan User";
   const userEmail = session.data?.user.email ?? "";
 
@@ -374,7 +296,6 @@ export function AuthenticatedAppShell({
       <aside className="hidden w-60 shrink-0 border-r border-separator bg-background px-4 py-4 lg:sticky lg:top-0 lg:flex lg:h-[100dvh] lg:flex-col">
         <SidebarContent
           pathname={pathname}
-          workspaceName={workspaceName}
           channels={items}
           activeChannelSlug={activeChannelSlug}
         />
@@ -383,7 +304,6 @@ export function AuthenticatedAppShell({
         <div className="hidden justify-end border-b border-separator bg-background/95 px-8 py-5 backdrop-blur lg:sticky lg:top-0 lg:z-20 lg:flex xl:px-12">
           <AccountMenu
             initials={initials}
-            workspaceName={workspaceName}
             userName={userName}
             userEmail={userEmail}
           />
@@ -401,7 +321,6 @@ export function AuthenticatedAppShell({
               </SheetHeader>
               <SidebarContent
                 pathname={pathname}
-                workspaceName={workspaceName}
                 channels={items}
                 activeChannelSlug={activeChannelSlug}
               />

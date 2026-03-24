@@ -50,15 +50,6 @@ export default function SettingsAccountPage() {
 
   return (
     <section className="max-w-[560px] space-y-8">
-      <div className="space-y-2">
-        <h2 className="font-display text-[32px] font-semibold tracking-[-0.04em] text-foreground">
-          Profile
-        </h2>
-        <p className="text-[15px] leading-7 text-muted-foreground">
-          Manage your account information and preferences.
-        </p>
-      </div>
-
       <div className="flex items-center gap-5">
         <ChannelAvatar
           channelName={me.data?.user.name ?? "YTScan User"}
@@ -80,7 +71,7 @@ export default function SettingsAccountPage() {
           <span className="text-[15px] font-medium text-foreground">Email</span>
           <Input value={me.data?.user.email ?? ""} readOnly />
           <span className="text-[13px] text-muted-foreground">
-            Contact support to change your email address.
+            Magic-link sign-in is tied to this address.
           </span>
         </label>
       </div>

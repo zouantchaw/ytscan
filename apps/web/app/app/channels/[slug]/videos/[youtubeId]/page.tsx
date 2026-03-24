@@ -7,7 +7,6 @@ import { useParams } from "next/navigation";
 import type {
   ChannelDashboard,
   ChannelVideosResponse,
-  HookLibraryResponse,
   SearchResponse,
   SearchResultItem,
   VideoSummary,
@@ -70,10 +69,9 @@ function buildTopicTags(video: VideoSummary, dashboard: ChannelDashboard | null)
 }
 
 function buildTranscriptPassages(
-  searchItems: SearchResultItem[],
-  youtubeId: string
+  searchItems: SearchResultItem[]
 ) {
-  return searchItems.filter((item) => item.youtubeId === youtubeId).slice(0, 3);
+  return searchItems.slice(0, 4);
 }
 
 export default function VideoDetailPage() {
@@ -84,7 +82,6 @@ export default function VideoDetailPage() {
   const videos = useBackendQuery<ChannelVideosResponse>(
     `/channels/${encodeURIComponent(slug)}/videos?limit=250&sort=recent`
   );
-  const hooks = useBackendQuery<HookLibraryResponse>(`/hooks/${encodeURIComponent(slug)}?sort=views`);
   const selectedVideo = useMemo(
     () => videos.data?.items.find((item) => item.youtubeId === youtubeId) ?? null,
     [videos.data?.items, youtubeId]
@@ -94,19 +91,17 @@ export default function VideoDetailPage() {
     selectedVideo
       ? `/search?channel=${encodeURIComponent(slug)}&q=${encodeURIComponent(
           transcriptQuery
-        )}&limit=18&mode=text`
+        )}&youtubeId=${encodeURIComponent(youtubeId)}&limit=6&mode=text`
       : null,
     { enabled: Boolean(selectedVideo) }
   );
 
-  const matchingHooks =
-    hooks.data?.items.filter((item) => item.youtubeId === youtubeId).slice(0, 3) ?? [];
-  const transcriptPassages = buildTranscriptPassages(transcriptSearch.data?.items ?? [], youtubeId);
+  const transcriptPassages = buildTranscriptPassages(transcriptSearch.data?.items ?? []);
   const topicTags = selectedVideo ? buildTopicTags(selectedVideo, dashboard.data) : [];
   const score = selectedVideo ? buildPerformanceScore(selectedVideo) : 0;
   const thumbnailAnalysis = selectedVideo?.thumbnailAnalysis ?? null;
 
-  if (videos.error || dashboard.error || hooks.error) {
+  if (videos.error || dashboard.error) {
     return (
       <main className="app-page py-9">
         <ErrorState
@@ -117,7 +112,6 @@ export default function VideoDetailPage() {
               onClick={() => {
                 videos.refetch();
                 dashboard.refetch();
-                hooks.refetch();
                 transcriptSearch.refetch();
               }}
             >
@@ -168,7 +162,6 @@ export default function VideoDetailPage() {
     1,
     Math.round(((viewRanking + 1) / Math.max(videos.data?.items.length ?? 1, 1)) * 100)
   );
-  const primaryHook = matchingHooks[0];
 
   return (
     <main className="app-page py-9">
@@ -230,16 +223,10 @@ export default function VideoDetailPage() {
                     <p className="text-[14px] leading-7 text-foreground">{item.snippet}</p>
                   </div>
                 ))
-              ) : primaryHook ? (
-                <div className="flex gap-3">
-                  <span className="w-10 shrink-0 text-[12px] font-medium text-primary">
-                    {primaryHook.timestampLabel}
-                  </span>
-                  <p className="text-[14px] leading-7 text-foreground">{primaryHook.text}</p>
-                </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  Transcript passages will appear here once a tighter search match is found.
+                  Transcript passages will appear here once the archive finds tighter transcript
+                  matches for this video.
                 </p>
               )}
             </AppPanel>
@@ -283,23 +270,31 @@ export default function VideoDetailPage() {
 
           <AppPanel className="grid gap-3 px-5 py-5">
             <h2 className="font-display text-[16px] font-semibold tracking-[-0.03em] text-foreground">
-              Hook Pattern
+              Archive Notes
             </h2>
-            {primaryHook ? (
-              <>
-                <span className="w-fit rounded-[4px] bg-accent px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-primary">
-                  {primaryHook.hookType.replace(/_/g, " ")}
-                </span>
-                <p className="text-[13px] leading-6 text-muted-foreground">
-                  Opens with {primaryHook.hookType.replace(/_/g, " ")} framing and uses a concrete promise in the
-                  first minute.
-                </p>
-              </>
-            ) : (
-              <p className="text-[13px] leading-6 text-muted-foreground">
-                Hook analysis will appear here once the library finds a first-minute segment for this video.
+            <div className="grid gap-3 text-[13px] leading-6 text-muted-foreground">
+              <p>
+                {selectedVideo.description
+                  ? selectedVideo.description
+                  : "No description was captured for this upload. Use transcript search to inspect the full archive context."}
               </p>
-            )}
+              <div className="flex flex-wrap gap-2">
+                {selectedVideo.tags.length ? (
+                  selectedVideo.tags.slice(0, 8).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-[4px] bg-secondary px-2.5 py-1 text-[12px] font-medium text-muted-foreground"
+                    >
+                      {tag}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-[13px] text-muted-foreground">
+                    No tags were stored for this video.
+                  </span>
+                )}
+              </div>
+            </div>
           </AppPanel>
 
           <AppPanel className="grid gap-3 px-5 py-5">
@@ -357,8 +352,8 @@ export default function VideoDetailPage() {
           ) : null}
 
           <Button asChild variant="dark">
-            <Link href={`/app/channels/${slug}/script-lab?topic=${encodeURIComponent(selectedVideo.title)}`}>
-              Use in Script Lab
+            <Link href={`/app/channels/${slug}/search?q=${encodeURIComponent(selectedVideo.title)}`}>
+              Search this topic in the archive
             </Link>
           </Button>
         </aside>

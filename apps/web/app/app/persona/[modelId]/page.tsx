@@ -1,5 +1,5 @@
-import { PersonaModelDetailPageContent } from "@/components/app/persona/persona-model-detail-page";
+import { redirect } from "next/navigation";
 
 export default function PersonaModelDetailPage() {
-  return <PersonaModelDetailPageContent />;
+  redirect("/app/channels");
 }

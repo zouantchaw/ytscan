@@ -16,12 +16,13 @@ export default function Home() {
             </Badge>
             <div className="space-y-5">
               <h1 className="text-balance text-[44px] font-bold leading-[0.98] tracking-[-0.05em] md:text-[56px] xl:text-[64px] xl:leading-[68px] xl:tracking-[-0.035em]">
-                Scan any channel.
+                Import any YouTube channel.
                 <br />
-                Know what works.
+                Get the full historical picture.
               </h1>
               <p className="mx-auto max-w-[540px] text-[17px] leading-8 text-[#6b6b66] md:text-[18px] md:leading-7">
-                YouTube content intelligence that ingests every video, surfaces what performs, and helps you create what&apos;s next.
+                YTScan ingests every video, transcript, and thumbnail so you can analyze a creator
+                without digging through the YouTube UI one upload at a time.
               </p>
             </div>
           </div>

@@ -16,6 +16,9 @@ export type VideoSummary = {
   viewCount: number;
   likeCount: number;
   commentCount: number;
+  description: string;
+  tags: string[];
+  engagementRate: number;
   performanceTier: string;
   videoUrl: string;
   thumbnailAnalysis: ThumbnailAnalysisSummary | null;
@@ -159,7 +162,21 @@ export type ChannelVideosResponse = {
   channel: string;
   items: VideoSummary[];
   count: number;
-  sort: "views" | "recent";
+  totalCount: number;
+  sort: "views" | "recent" | "engagement";
+  filters: {
+    query: string | null;
+    performanceTier: string | null;
+    durationBucket: string | null;
+    minViews: number | null;
+  };
+  stats: {
+    totalVideos: number;
+    totalViews: number;
+    averageViews: number;
+    averageDurationSec: number;
+    averageEngagementRate: number;
+  };
 };
 
 export type ChannelTopicsResponse = {

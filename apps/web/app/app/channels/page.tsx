@@ -44,7 +44,7 @@ function ChannelSelectorCard({ channel }: { channel: ChannelSummary }) {
       : "text-destructive";
 
   return (
-    <Link href={`/app/channels/${channel.slug}/opportunities`} className="block">
+    <Link href={`/app/channels/${channel.slug}`} className="block">
       <AppPanel className="overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
         <div
           className={cn(
@@ -97,11 +97,11 @@ export default function ChannelSelectorPage() {
               Your Channels
             </h1>
             <p className="text-[15px] leading-7 text-muted-foreground">
-              Select a channel to review its best next opportunities, or scan a new one.
+              Select a scanned YouTube channel to open its historical dashboard and searchable archive.
             </p>
           </div>
           <Button asChild>
-            <Link href="/app/scans/new">+ Scan New Channel</Link>
+            <Link href="/app/scans/new">+ Scan Channel</Link>
           </Button>
         </div>
 

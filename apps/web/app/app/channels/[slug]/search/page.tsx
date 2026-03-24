@@ -98,10 +98,11 @@ export default function ChannelSearchPage() {
         <section className="space-y-4">
           <div className="space-y-2">
             <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
-              Semantic Search
+              Transcript Archive Search
             </h1>
             <p className="text-[15px] leading-7 text-muted-foreground">
-              Search across all scanned transcripts using natural language.
+              Search across the full transcript archive using plain language and jump straight to
+              the moments that matter.
             </p>
           </div>
           <form
@@ -123,8 +124,8 @@ export default function ChannelSearchPage() {
 
         {!hasQuery ? (
           <SearchStateCard
-            title="Search transcripts, hooks, and topics"
-            description="Ask a question in plain English to surface the exact moments this creator has covered the topic."
+            title="Search the full channel archive"
+            description="Ask a question in plain English to surface the exact moments this creator covered a business, claim, or recurring idea."
             action={
               <div className="flex flex-wrap justify-center gap-3">
                 {suggestions.map((suggestion) => (
@@ -146,14 +147,14 @@ export default function ChannelSearchPage() {
           />
         ) : results.error ? (
           <SearchStateCard
-            title="Search unavailable right now"
+            title="Archive search is unavailable right now"
             description="We hit a backend error while searching this channel. Retry the query or refine the wording and try again."
             action={<Button onClick={() => results.refetch()}>Retry Search</Button>}
           />
         ) : resultItems.length ? (
           <>
             <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-              <FilterChip>Semantic</FilterChip>
+              <FilterChip>Transcript archive</FilterChip>
               <FilterChip>{channel.data?.channelName ?? "Current channel"}</FilterChip>
               <FilterChip>{results.data?.videoCount ?? 0} videos</FilterChip>
               <span>{results.data?.count ?? 0} results</span>
@@ -201,7 +202,7 @@ export default function ChannelSearchPage() {
         ) : (
           <SearchStateCard
             title="No matches yet"
-            description="Try broadening the topic, using a different wording, or searching for a more concrete business, hook, or claim."
+            description="Try broadening the topic, using a different wording, or searching for a more concrete business, claim, or recurring theme from the archive."
             action={
               <Button
                 variant="outline"

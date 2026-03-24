@@ -1,5 +1,5 @@
-import { PersonaModelHistoryPageContent } from "@/components/app/persona/persona-model-history-page";
+import { redirect } from "next/navigation";
 
 export default function PersonaModelHistoryPage() {
-  return <PersonaModelHistoryPageContent />;
+  redirect("/app/channels");
 }

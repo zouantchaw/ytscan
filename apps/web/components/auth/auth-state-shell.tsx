@@ -53,8 +53,8 @@ export function AuthStateShell({
   return (
     <main className="grid min-h-screen bg-background md:grid-cols-[560px_1fr]">
       <AuthBrandPanel
-        title={"Scan any channel.\nKnow what works.\nCreate what's next."}
-        description="YouTube content intelligence for creators and teams who want data-driven decisions, not gut feelings."
+        title={"Import any channel.\nSee the full archive.\nFind what matters."}
+        description="Sign in to scan a YouTube channel, pull its historical data, and inspect the archive through one clean dashboard."
       />
       <section className="flex items-center justify-center px-6 py-14 md:px-12">
         <div className="w-full max-w-[460px] space-y-8">

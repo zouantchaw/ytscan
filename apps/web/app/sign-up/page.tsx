@@ -11,8 +11,8 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
   return (
     <main className="grid min-h-screen bg-background md:grid-cols-[540px_1fr]">
       <AuthBrandPanel
-        title={"Start scanning.\nStart winning."}
-        description="Join creators and teams using data to make better content decisions before the camera ever rolls."
+        title={"Build a cleaner\nYouTube archive."}
+        description="Create an account to scan channels, capture the historical record, and stop doing research through the native YouTube UI."
       />
       <section className="flex items-center justify-center px-6 py-14 md:px-12">
         <MagicLinkForm mode="sign-up" defaultChannelUrl={channelUrl} />

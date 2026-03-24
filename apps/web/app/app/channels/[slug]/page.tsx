@@ -6,7 +6,6 @@ import { useTransition } from "react";
 import type {
   ChannelDashboard,
   ChannelVideosResponse,
-  HookSummary,
   TopicClusterSummary,
   VideoSummary,
 } from "@ytscan/core";
@@ -126,17 +125,30 @@ function TopicClusterRow({ topic }: { topic: TopicClusterSummary }) {
   );
 }
 
-function HookRow({ hook }: { hook: HookSummary }) {
+function RecentUploadRow({
+  slug,
+  video,
+}: {
+  slug: string;
+  video: VideoSummary;
+}) {
   return (
-    <div className="rounded-[8px] bg-background px-3 py-3">
-      <p className="text-[15px] leading-7 text-foreground">
-        &ldquo;{hook.text}&rdquo;
-      </p>
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-        <span className="font-medium text-primary">{formatCompactNumber(hook.viewCount)} views</span>
-        <span>{hook.hookType.replace(/_/g, " ")} hook</span>
+    <Link
+      href={`/app/channels/${slug}/videos/${video.youtubeId}`}
+      className="grid grid-cols-[72px_1fr] items-center gap-4 border-b border-separator py-4 last:border-b-0 last:pb-0 first:pt-0"
+    >
+      <VideoThumbnail
+        youtubeId={video.youtubeId}
+        title={video.title}
+        className="h-[42px] rounded-[8px] object-cover"
+      />
+      <div className="min-w-0">
+        <p className="truncate text-[15px] font-medium text-foreground">{video.title}</p>
+        <p className="text-sm text-muted-foreground">
+          {formatRelativeDate(video.uploadDate)} · {formatCompactNumber(video.viewCount)} views
+        </p>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -242,9 +254,19 @@ export default function ChannelDashboardPage() {
                 {handle} · {channel.totalVideos} videos ·{" "}
                 {formatCompactNumber(channel.subscriberCount)} subscribers · {scannedLabel}
               </p>
+              <p className="max-w-[720px] text-[15px] leading-7 text-muted-foreground">
+                Historical dashboard for every scanned upload: performance, topics, cadence, and
+                the patterns that shaped this channel over time.
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button asChild variant="outline">
+              <Link href={`/app/channels/${slug}/videos`}>View Video Archive</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/app/channels/${slug}/search`}>Search Archive</Link>
+            </Button>
             <Button variant="outline" onClick={() => window.print()}>
               Export Report
             </Button>
@@ -293,12 +315,9 @@ export default function ChannelDashboardPage() {
               <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
                 Top Performers
               </h2>
-              <Link
-                href={`/app/channels/${slug}/thumbnails`}
-                className="text-sm font-medium text-primary hover:text-primary/80"
-              >
-                View all →
-              </Link>
+              <Button asChild variant="ghost" className="text-[13px] font-medium">
+                <Link href={`/app/channels/${slug}/videos?sort=views`}>View all videos</Link>
+              </Button>
             </div>
             <div>
               {channel.topVideos.slice(0, 5).map((video) => (
@@ -310,9 +329,14 @@ export default function ChannelDashboardPage() {
 
         <section className="grid gap-6 xl:grid-cols-2">
           <AppPanel className="flex flex-col gap-4 px-6 py-6">
-            <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
-              Topic Clusters
-            </h2>
+            <div className="space-y-1">
+              <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+                Topic Clusters
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                The recurring subjects and business angles this channel comes back to most.
+              </p>
+            </div>
             <div className="grid gap-4">
               {channel.topicClusters.slice(0, 5).map((topic) => (
                 <TopicClusterRow key={topic.topic} topic={topic} />
@@ -320,20 +344,17 @@ export default function ChannelDashboardPage() {
             </div>
           </AppPanel>
           <AppPanel className="flex flex-col gap-4 px-6 py-6">
-            <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
               <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
-                Top Hooks
+                Recent Uploads
               </h2>
-              <Link
-                href={`/app/channels/${slug}/hooks`}
-                className="text-sm font-medium text-primary hover:text-primary/80"
-              >
-                View all →
-              </Link>
+              <p className="text-sm text-muted-foreground">
+                The latest videos imported into this archive, with performance visible at a glance.
+              </p>
             </div>
             <div className="grid gap-3">
-              {channel.topHooks.slice(0, 3).map((hook) => (
-                <HookRow key={`${hook.youtubeId}-${hook.startTime}`} hook={hook} />
+              {recentVideos.data?.items.slice(0, 3).map((video) => (
+                <RecentUploadRow key={video.youtubeId} slug={slug} video={video} />
               ))}
             </div>
           </AppPanel>
