@@ -151,21 +151,14 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
 
     return {
       content: [
-        `# Hooks for ${viewerTitle}`,
+        `1. ${context.opportunity.recommendedHook}`,
+        `2. ${viewerTopic} looks mainstream from the outside, but the money is in the version smart operators see before everyone else does.`,
+        `3. The biggest mistake people make about ${viewerTopic} is chasing the flashy story instead of the boring angle that actually compounds.`,
         "",
-        "## Option 1 (recommended)",
-        context.opportunity.recommendedHook,
+        `Best pick: ${context.opportunity.recommendedHook}`,
+        `Why it wins: ${context.opportunity.whyNow} ${context.opportunity.rationale}`,
         "",
-        "## Option 2 (operator lens)",
-        `${viewerTopic} looks mainstream from the outside, but the money is in the version smart operators see before everyone else does.`,
-        "",
-        "## Option 3 (contrarian)",
-        `The biggest mistake people make about ${viewerTopic} is chasing the flashy story instead of the boring angle that actually compounds.`,
-        "",
-        "## Why these hooks should work",
-        `${context.opportunity.whyNow} ${context.opportunity.rationale}`,
-        "",
-        "## Proof points to land in the opening",
+        "Opening proof:",
         proofPoints || "- Pull the strongest example from the selected opportunity.",
       ].join("\n"),
       metadata: {
@@ -198,17 +191,12 @@ function buildHookDraft(context: ScriptLabGenerationContext) {
 
   return {
     content: [
-      `# Hooks for ${context.projectTitle}`,
+      ...hooks.map((hook, index) => `${index + 1}. ${hook.text}`),
       "",
-      ...hooks.flatMap((hook, index) => [
-        `## Option ${index + 1} (${hook.hookType})`,
-        hook.text,
-        "",
-      ]),
-      ...(personaAnchors
-        ? ["## Persona anchors", personaAnchors, ""]
-        : []),
-      "## Proof points to support the opening",
+      `Best pick: ${hooks[0]?.text ?? `Lead with the most counterintuitive claim about ${context.topic}.`}`,
+      `Why it wins: ${personaAnchors ? cleanText(personaAnchors.split("\n")[0] ?? "") : `It anchors ${context.topic} in a concrete operator insight instead of generic category talk.`}`,
+      "",
+      "Opening proof:",
       proofPoints || "- No direct transcript hits yet. Use the channel's strongest existing examples first.",
     ].join("\n"),
     metadata: {
@@ -307,30 +295,25 @@ function buildScriptDraft(context: ScriptLabGenerationContext) {
     const viewerTopic = getOpportunityViewerTopic(context.opportunity);
     const leadProof = context.opportunity.channelEvidence[0] ?? context.opportunity.competitorEvidence[0] ?? null;
     const secondaryProof = context.opportunity.competitorEvidence[0] ?? context.opportunity.channelEvidence[1] ?? null;
+    const proofLead = leadProof
+      ? `${leadProof.title}${leadProof.supportingMetric ? `, ${leadProof.supportingMetric},` : ""} is the proof point that makes this argument real. ${leadProof.detail}`
+      : `${context.opportunity.rationale} So instead of repeating the usual advice, we are going to break down the version that actually matters to someone trying to build wealth through smart business decisions.`;
+    const proofContrast = secondaryProof
+      ? `${secondaryProof.title}${secondaryProof.supportingMetric ? `, ${secondaryProof.supportingMetric},` : ""} is the comparison point that sharpens that contrast. ${secondaryProof.detail}`
+      : `The job now is to break the audience out of the default framing and show them the real decision that sits underneath ${viewerTopic}.`;
 
     return {
       content: [
-        `# Script Draft: ${context.projectTitle}`,
-        "",
-        "## Voice targets",
-        `- Direct, contrarian, practical, and operator-first for ${context.channelName}.`,
-        `- Keep the frame on ${viewerTopic}, but push toward what is misunderstood or underpriced.`,
-        "",
-        "## First-minute draft",
         context.opportunity.recommendedHook,
         "",
         `${context.opportunity.whyNow} That is exactly why this topic matters right now, because most people are still looking at the wrong part of the story.`,
         "",
         `Here is the angle I want to make clear from the start: ${context.opportunity.angle}`,
         "",
-        leadProof
-          ? `${leadProof.title}${leadProof.supportingMetric ? `, ${leadProof.supportingMetric},` : ""} is the proof point that makes this argument real. ${leadProof.detail}`
-          : `${context.opportunity.rationale} So instead of repeating the usual advice, we are going to break down the version that actually matters to someone trying to build wealth through smart business decisions.`,
+        proofLead,
         "",
         "Most people tell the obvious version of this story. The better version is the one an operator sees before the crowd does.",
-        secondaryProof
-          ? `${secondaryProof.title}${secondaryProof.supportingMetric ? `, ${secondaryProof.supportingMetric},` : ""} is the comparison point that sharpens that contrast. ${secondaryProof.detail}`
-          : `The job now is to break the audience out of the default framing and show them the real decision that sits underneath ${viewerTopic}.`,
+        proofContrast,
         "",
         `By the end of this opening minute, the viewer should know exactly what to look for, what to avoid, and why the boring version of ${viewerTopic} might be the one with the best upside.`,
       ].join("\n"),
