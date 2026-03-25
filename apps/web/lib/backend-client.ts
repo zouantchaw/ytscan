@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export class BackendError extends Error {
   status: number;
@@ -76,7 +76,13 @@ export function useBackendQuery<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<BackendError | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(enabled));
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const dataRef = useRef<T | null>(null);
+
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   const key = useMemo(() => `${path ?? ""}:${reloadToken}`, [path, reloadToken]);
 
@@ -97,21 +103,36 @@ export function useBackendQuery<T>(
     let active = true;
 
     async function run() {
+      const hasCachedData = dataRef.current !== null;
+
       try {
-        setIsLoading(true);
-        setError(null);
+        if (hasCachedData) {
+          setIsRefreshing(true);
+        } else {
+          setIsLoading(true);
+        }
+
+        if (!hasCachedData) {
+          setError(null);
+        }
+
         const payload = await fetchBackend<T>(resolvedPath);
         if (!active) return;
         setData(payload);
+        setError(null);
       } catch (caughtError) {
         if (!active) return;
-        setError(
-          caughtError instanceof BackendError
-            ? caughtError
-            : new BackendError("Unknown request error", 500, null)
-        );
+        if (dataRef.current === null) {
+          setError(
+            caughtError instanceof BackendError
+              ? caughtError
+              : new BackendError("Unknown request error", 500, null)
+          );
+        }
       } finally {
-        if (active) setIsLoading(false);
+        if (!active) return;
+        setIsLoading(false);
+        setIsRefreshing(false);
       }
     }
 
@@ -134,6 +155,7 @@ export function useBackendQuery<T>(
     data,
     error,
     isLoading,
+    isRefreshing,
     refetch,
   };
 }
