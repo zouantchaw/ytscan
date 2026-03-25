@@ -261,6 +261,8 @@ async function resolveOrCreatePrimaryWorkspace(
       ).bind(workspaceId, session.user.id, createdAt, createdAt),
     ]);
 
+    // In single-tenant mode we intentionally sweep legacy unassigned data
+    // into the shared studio so the existing corpus remains accessible.
     await attachUnassignedData(workspaceId, session.user.id, env);
 
     workspace = {
@@ -277,6 +279,7 @@ async function resolveOrCreatePrimaryWorkspace(
   }
 
   const normalizedWorkspace = await updatePrimaryWorkspaceMetadata(workspace, env);
+  // Keep legacy single-tenant behavior only for the shared studio path.
   await attachUnassignedData(normalizedWorkspace.id, session.user.id, env);
   return ensureWorkspaceMembership(normalizedWorkspace, session, env);
 }
@@ -314,8 +317,6 @@ async function createDefaultWorkspace(
       `
     ).bind(workspaceId, session.user.id, createdAt, createdAt),
   ]);
-
-  await attachUnassignedData(workspaceId, session.user.id, env);
 
   return {
     created_at: createdAt,
