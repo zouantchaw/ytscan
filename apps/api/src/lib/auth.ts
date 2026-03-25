@@ -128,13 +128,19 @@ export function createAuth(env: Env, request?: Request) {
 
           const { html, text } = buildMagicLinkEmail(url);
 
-          await resend.emails.send({
+          const result = await resend.emails.send({
             from: getSenderIdentity(env),
             html,
             subject: "Your YTScan sign-in link",
             text,
             to: email,
           });
+
+          if (result.error) {
+            throw new Error(
+              `Failed to send magic link: ${result.error.message || "Unknown email delivery error"}`
+            );
+          }
         },
       }),
     ],
