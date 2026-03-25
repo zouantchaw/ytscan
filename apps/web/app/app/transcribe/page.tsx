@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AudioLines, FileVideo, RefreshCw, UploadCloud } from "lucide-react";
+import { AudioLines, FileVideo, RefreshCw, UploadCloud, X } from "lucide-react";
 import type {
   UploadedMediaCreateResponse,
   UploadedMediaListResponse,
@@ -17,7 +17,6 @@ import {
 } from "@/components/app/app-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { BackendError, fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import {
   formatDuration,
@@ -123,6 +122,7 @@ export default function TranscribePage() {
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
 
@@ -133,6 +133,32 @@ export default function TranscribePage() {
       ).length ?? 0,
     [uploads.data?.items]
   );
+
+  function selectFile(nextFile: File | null) {
+    setSelectedFile(nextFile);
+    setUploadError(null);
+    setUploadSuccess(null);
+  }
+
+  function openFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  function handleDragState(event: React.DragEvent<HTMLDivElement>, nextDragging: boolean) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isUploading) return;
+    setIsDragging(nextDragging);
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isUploading) return;
+    setIsDragging(false);
+    const nextFile = event.dataTransfer.files?.[0] ?? null;
+    selectFile(nextFile);
+  }
 
   async function handleUploadSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -213,25 +239,83 @@ export default function TranscribePage() {
             </div>
 
             <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleUploadSubmit}>
-              <div className="grid gap-2">
+              <div className="grid gap-3">
                 <label className="text-[15px] font-medium text-foreground" htmlFor="transcribe-upload">
                   Source file
                 </label>
-                <Input
-                  id="transcribe-upload"
-                  ref={fileInputRef}
-                  type="file"
-                  accept="audio/*,video/*"
-                  onChange={(event) => {
-                    const nextFile = event.target.files?.[0] ?? null;
-                    setSelectedFile(nextFile);
-                    setUploadError(null);
-                    setUploadSuccess(null);
-                  }}
-                />
-                <p className="text-[13px] text-muted-foreground">
-                  MP4, MOV, MP3, WAV, M4A, and similar formats up to {MAX_UPLOAD_MB} MB.
-                </p>
+                <div
+                  className={[
+                    "grid min-h-[180px] gap-4 rounded-[16px] border border-dashed px-5 py-5 transition-colors",
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-secondary/40 hover:border-primary/40 hover:bg-secondary/70",
+                    isUploading ? "opacity-70" : "",
+                  ].join(" ")}
+                  onDragEnter={(event) => handleDragState(event, true)}
+                  onDragOver={(event) => handleDragState(event, true)}
+                  onDragLeave={(event) => handleDragState(event, false)}
+                  onDrop={handleDrop}
+                >
+                  <input
+                    id="transcribe-upload"
+                    ref={fileInputRef}
+                    type="file"
+                    accept="audio/*,video/*"
+                    className="sr-only"
+                    onChange={(event) => {
+                      const nextFile = event.target.files?.[0] ?? null;
+                      selectFile(nextFile);
+                    }}
+                  />
+                  <div className="grid gap-2">
+                    <div className="flex size-12 items-center justify-center rounded-[14px] bg-primary/10 text-primary">
+                      <UploadCloud className="size-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[15px] font-medium text-foreground">
+                        Drag and drop a video or audio file
+                      </p>
+                      <p className="text-[13px] leading-6 text-muted-foreground">
+                        MP4, MOV, MP3, WAV, M4A, and similar formats up to {MAX_UPLOAD_MB} MB.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button type="button" variant="outline" onClick={openFilePicker} disabled={isUploading}>
+                      Choose file
+                    </Button>
+                    <p className="text-[13px] text-muted-foreground">
+                      The file stays private to your workspace.
+                    </p>
+                  </div>
+
+                  {selectedFile ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-border bg-card px-4 py-3">
+                      <div className="space-y-1">
+                        <p className="text-[14px] font-medium text-foreground">{selectedFile.name}</p>
+                        <p className="text-[12px] text-muted-foreground">
+                          {formatFileSize(selectedFile.size)}
+                          {selectedFile.type ? ` · ${selectedFile.type}` : ""}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Remove selected file"
+                        onClick={() => {
+                          selectFile(null);
+                          if (fileInputRef.current) {
+                            fileInputRef.current.value = "";
+                          }
+                        }}
+                      >
+                        <X className="size-4" />
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
               <div className="flex items-end">
                 <Button type="submit" size="lg" disabled={!selectedFile || isUploading}>
@@ -268,6 +352,7 @@ export default function TranscribePage() {
             <div className="space-y-3 text-sm text-muted-foreground">
               <p>Uploads are stored privately in your workspace.</p>
               <p>Completed transcripts include full text plus timestamped segments, TXT, SRT, VTT, and JSON exports.</p>
+              <p>Failed jobs can be retried from the transcript detail page without re-uploading the source file.</p>
               <Button variant="outline" onClick={() => uploads.refetch()}>
                 <RefreshCw className="size-4" />
                 Refresh archive

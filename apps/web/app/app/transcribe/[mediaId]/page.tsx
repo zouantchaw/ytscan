@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useTransition } from "react";
-import { Download, FileAudio, FileJson, FileText, FileVideo, RefreshCw } from "lucide-react";
+import { Fragment, useMemo, useState, useTransition } from "react";
+import { Check, Copy, Download, FileAudio, FileJson, FileText, FileVideo, RefreshCw, Search, X } from "lucide-react";
 import { useParams } from "next/navigation";
 import type {
   GenerationAssetSummary,
   UploadedMediaResponse,
-  UploadedMediaSegment,
 } from "@ytscan/core";
 import {
   AppPanel,
@@ -16,6 +15,7 @@ import {
 } from "@/components/app/app-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { buildBackendUrl, fetchBackend, useBackendQuery } from "@/lib/backend-client";
 import {
   formatDuration,
@@ -30,6 +30,10 @@ function formatFileSize(bytes: number | null | undefined) {
   if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
   return `${(value / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function mediaStatusLabel(status: string) {
@@ -89,15 +93,32 @@ function TranscriptAssetLink({ asset }: { asset: GenerationAssetSummary }) {
   );
 }
 
-function TranscriptSegmentRow({ segment }: { segment: UploadedMediaSegment }) {
+function HighlightedTranscript({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
+  if (!query.trim()) {
+    return <>{text}</>;
+  }
+
+  const pattern = new RegExp(`(${escapeRegExp(query.trim())})`, "ig");
+  const parts = text.split(pattern);
+
   return (
-    <div className="grid gap-2 rounded-[10px] border border-border px-4 py-3">
-      <div className="flex items-center gap-3 text-[12px] font-medium text-primary">
-        <span>{segment.timestampLabel}</span>
-        <span className="text-muted-foreground">{formatInteger(segment.wordCount)} words</span>
-      </div>
-      <p className="text-[15px] leading-7 text-foreground">{segment.text}</p>
-    </div>
+    <>
+      {parts.map((part, index) =>
+        part.toLowerCase() === query.trim().toLowerCase() ? (
+          <mark key={`${part}-${index}`} className="rounded-[4px] bg-primary/12 px-0.5 text-foreground">
+            {part}
+          </mark>
+        ) : (
+          <Fragment key={`${part}-${index}`}>{part}</Fragment>
+        )
+      )}
+    </>
   );
 }
 
@@ -108,6 +129,10 @@ export default function UploadedMediaDetailPage() {
     pollMs: 5000,
   });
   const [isRetrying, startRetry] = useTransition();
+  const [isCopying, startCopy] = useTransition();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
 
   const media = detail.data?.media ?? null;
   const latestJob = media?.latestJob ?? null;
@@ -126,12 +151,50 @@ export default function UploadedMediaDetailPage() {
     [media?.transcriptAssets]
   );
 
+  const filteredSegments = useMemo(() => {
+    const segments = media?.segments ?? [];
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return segments;
+    return segments.filter((segment) => {
+      const haystack = `${segment.timestampLabel} ${segment.text}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [media?.segments, searchQuery]);
+
+  const transcriptText = media?.segments.map((segment) => segment.text).join("\n") ?? "";
+  const transcriptWithTimestamps =
+    media?.segments
+      .map((segment) => `${segment.timestampLabel} ${segment.text}`)
+      .join("\n") ?? "";
+
   function handleRetry() {
     startRetry(async () => {
-      await fetchBackend(`/media/${encodeURIComponent(mediaId)}/transcribe`, {
-        method: "POST",
-      });
-      detail.refetch();
+      setRetryFeedback(null);
+      try {
+        await fetchBackend(`/media/${encodeURIComponent(mediaId)}/transcribe`, {
+          method: "POST",
+        });
+        setRetryFeedback("Retry queued. The worker will pick this file up again automatically.");
+        detail.refetch();
+      } catch (error) {
+        setRetryFeedback(error instanceof Error ? error.message : "Retry failed.");
+      }
+    });
+  }
+
+  function copyTranscript(kind: "plain" | "timestamps") {
+    const text = kind === "timestamps" ? transcriptWithTimestamps : transcriptText;
+    if (!text.trim()) return;
+
+    startCopy(async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopyState("copied");
+        window.setTimeout(() => setCopyState("idle"), 2200);
+      } catch {
+        setCopyState("error");
+        window.setTimeout(() => setCopyState("idle"), 2200);
+      }
     });
   }
 
@@ -269,8 +332,27 @@ export default function UploadedMediaDetailPage() {
             ) : null}
 
             {media.status === "failed" && media.errorMessage ? (
-              <div className="rounded-[12px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                {media.errorMessage}
+              <AppPanel className="grid gap-4 border-destructive/20 bg-destructive/5 px-5 py-5">
+                <div className="space-y-1">
+                  <p className="text-[15px] font-medium text-destructive">Transcription failed</p>
+                  <p className="text-[14px] leading-6 text-destructive/90">
+                    {media.errorMessage}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button onClick={handleRetry} disabled={isRetrying}>
+                    <RefreshCw className="size-4" />
+                    {isRetrying ? "Retrying..." : "Retry transcription"}
+                  </Button>
+                  <p className="text-[13px] text-muted-foreground">
+                    No re-upload needed. The worker will reuse the existing source file.
+                  </p>
+                </div>
+              </AppPanel>
+            ) : null}
+            {retryFeedback ? (
+              <div className="rounded-[12px] border border-border bg-secondary/60 px-4 py-3 text-sm text-foreground">
+                {retryFeedback}
               </div>
             ) : null}
           </AppPanel>
@@ -281,6 +363,27 @@ export default function UploadedMediaDetailPage() {
               <p className="mt-1 text-[14px] leading-6 text-muted-foreground">
                 Download the transcript in plain text, subtitles, or JSON.
               </p>
+            </div>
+            <div className="grid gap-3">
+              <Button
+                variant="outline"
+                onClick={() => copyTranscript("plain")}
+                disabled={!transcriptText.trim() || isCopying}
+              >
+                {copyState === "copied" ? <Check className="size-4" /> : <Copy className="size-4" />}
+                {copyState === "copied" ? "Copied transcript" : "Copy transcript"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => copyTranscript("timestamps")}
+                disabled={!transcriptWithTimestamps.trim() || isCopying}
+              >
+                <Copy className="size-4" />
+                Copy with timestamps
+              </Button>
+              {copyState === "error" ? (
+                <p className="text-[12px] text-destructive">Clipboard access failed. Download the TXT export instead.</p>
+              ) : null}
             </div>
             {primaryAssetLinks.length ? (
               <div className="grid gap-3">
@@ -295,7 +398,7 @@ export default function UploadedMediaDetailPage() {
         </section>
 
         <section className="grid gap-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
                 Transcript
@@ -304,13 +407,54 @@ export default function UploadedMediaDetailPage() {
                 Timestamped segments you can skim, search, or export.
               </p>
             </div>
+            <div className="grid w-full gap-3 sm:max-w-[420px]">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search within this transcript"
+                  className="pl-10 pr-11"
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-[8px] p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    aria-label="Clear transcript search"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <X className="size-4" />
+                  </button>
+                ) : null}
+              </div>
+              <p className="text-[12px] text-muted-foreground">
+                {searchQuery.trim()
+                  ? `${formatInteger(filteredSegments.length)} matching segment${filteredSegments.length === 1 ? "" : "s"}`
+                  : `${formatInteger(media.segments.length)} total segment${media.segments.length === 1 ? "" : "s"}`}
+              </p>
+            </div>
           </div>
 
           {media.segments.length ? (
             <div className="grid gap-3">
-              {media.segments.map((segment) => (
-                <TranscriptSegmentRow key={segment.id} segment={segment} />
-              ))}
+              {filteredSegments.length ? (
+                filteredSegments.map((segment) => (
+                  <div key={segment.id} className="grid gap-2 rounded-[10px] border border-border px-4 py-3">
+                    <div className="flex items-center gap-3 text-[12px] font-medium text-primary">
+                      <span>{segment.timestampLabel}</span>
+                      <span className="text-muted-foreground">{formatInteger(segment.wordCount)} words</span>
+                    </div>
+                    <p className="text-[15px] leading-7 text-foreground">
+                      <HighlightedTranscript text={segment.text} query={searchQuery} />
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <EmptyState
+                  title="No transcript matches"
+                  description="Try a different phrase or clear the search to return to the full transcript."
+                />
+              )}
             </div>
           ) : media.status === "completed" ? (
             <EmptyState
