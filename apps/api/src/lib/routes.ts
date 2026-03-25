@@ -30,6 +30,12 @@ import type {
   ScriptResearchItem,
   ThumbnailAnalysisSummary,
   ThumbnailBriefVersion,
+  UploadedMediaCreateResponse,
+  UploadedMediaDetail,
+  UploadedMediaListResponse,
+  UploadedMediaResponse,
+  UploadedMediaSegment,
+  UploadedMediaSummary,
   VideoSummary,
   WorkspaceSummary,
 } from "@ytscan/core";
@@ -217,6 +223,7 @@ type GenerationJobRow = {
   workspace_id: string;
   project_id: string | null;
   persona_model_id: string | null;
+  uploaded_media_id: string | null;
   job_type: string;
   provider: string;
   provider_job_id: string | null;
@@ -260,6 +267,41 @@ type GenerationAssetRow = {
   byte_size: number | null;
   r2_key: string;
   metadata_json: string;
+  created_at: string;
+};
+
+type UploadedMediaRow = {
+  id: string;
+  workspace_id: string;
+  created_by_user_id: string;
+  source_kind: string;
+  file_name: string;
+  mime_type: string;
+  file_size_bytes: number;
+  status: string;
+  upload_token_hash: string | null;
+  upload_expires_at: string | null;
+  r2_key: string | null;
+  duration_sec: number | null;
+  language: string | null;
+  transcript_text: string | null;
+  transcript_word_count: number;
+  segment_count: number;
+  error_message: string | null;
+  uploaded_at: string | null;
+  transcribed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type UploadedMediaSegmentRow = {
+  id: string;
+  media_id: string;
+  segment_index: number;
+  start_time: number;
+  end_time: number;
+  text: string;
+  word_count: number;
   created_at: string;
 };
 
@@ -459,7 +501,7 @@ type ThumbnailAnalysisRow = {
 
 const BASE_CORS_HEADERS: HeadersInit = {
   "access-control-allow-headers": "Content-Type, Authorization, X-Internal-Token, X-Workspace-Id",
-  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 };
 
 const JSON_HEADERS: HeadersInit = {
@@ -633,6 +675,7 @@ const GENERATION_JOB_SELECT = `
   workspace_id,
   project_id,
   persona_model_id,
+  uploaded_media_id,
   job_type,
   provider,
   provider_job_id,
@@ -667,6 +710,41 @@ const GENERATION_ASSET_SELECT = `
   created_at
 `;
 
+const UPLOADED_MEDIA_SELECT = `
+  id,
+  workspace_id,
+  created_by_user_id,
+  source_kind,
+  file_name,
+  mime_type,
+  file_size_bytes,
+  status,
+  upload_token_hash,
+  upload_expires_at,
+  r2_key,
+  duration_sec,
+  language,
+  transcript_text,
+  transcript_word_count,
+  segment_count,
+  error_message,
+  uploaded_at,
+  transcribed_at,
+  created_at,
+  updated_at
+`;
+
+const UPLOADED_MEDIA_SEGMENT_SELECT = `
+  id,
+  media_id,
+  segment_index,
+  start_time,
+  end_time,
+  text,
+  word_count,
+  created_at
+`;
+
 const PERSONA_MODEL_SELECT = `
   pm.id,
   pm.workspace_id,
@@ -685,6 +763,20 @@ const PERSONA_MODEL_SELECT = `
   c.slug AS channel_slug,
   c.channel_name AS channel_name
 `;
+
+const MAX_MEDIA_UPLOAD_BYTES = 95 * 1024 * 1024;
+const SUPPORTED_MEDIA_MIME_TYPES = new Set([
+  "audio/m4a",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/webm",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+  "video/x-matroska",
+]);
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -720,6 +812,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       return withCors(await handleCallbackRoute(request, parts, env), request, env);
     }
 
+    if (parts[0] === "api" && parts[1] === "media" && parts[2] && parts[3] === "upload") {
+      return withCors(await uploadMediaFile(parts[2], request, env), request, env);
+    }
+
     const context = await getRequestContext(request, env);
     if (!context) {
       return withCors(jsonResponse({ error: "Unauthorized" }, 401), request, env);
@@ -735,6 +831,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     if (parts[0] === "api" && parts[1] === "script-lab") {
       return withCors(await handleScriptLabRoute(parts, request, context, env), request, env);
+    }
+
+    if (parts[0] === "api" && parts[1] === "media") {
+      return withCors(await handleUploadedMediaRoute(parts, request, context, env), request, env);
     }
 
     if (parts[0] === "api" && parts[1] === "persona-models") {
@@ -1027,6 +1127,11 @@ async function handleInternalRoute(
       if (action === "complete") return completeGenerationJob(jobId, request, env);
       if (action === "fail") return failGenerationJob(jobId, request, env);
       if (action === "assets") return uploadGenerationAsset(jobId, request, env);
+      if (action === "transcript") return syncGenerationJobTranscript(jobId, request, env);
+    }
+
+    if (request.method === "GET" && action === "source") {
+      return getGenerationJobSourceFile(jobId, request, env);
     }
 
     return jsonResponse({ error: "Not found" }, 404);
@@ -1527,6 +1632,242 @@ async function fetchLatestGenerationAssetByKind(
   return row ?? null;
 }
 
+async function fetchUploadedMediaRow(
+  mediaId: string,
+  workspaceId: string,
+  env: Env
+): Promise<UploadedMediaRow | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT ${UPLOADED_MEDIA_SELECT} FROM uploaded_media WHERE id = ? AND workspace_id = ? LIMIT 1`
+    )
+      .bind(mediaId, workspaceId)
+      .first<UploadedMediaRow>()) ?? null
+  );
+}
+
+async function fetchUploadedMediaByToken(
+  mediaId: string,
+  uploadTokenHash: string,
+  env: Env
+): Promise<UploadedMediaRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT ${UPLOADED_MEDIA_SELECT}
+        FROM uploaded_media
+        WHERE id = ? AND upload_token_hash = ? AND upload_expires_at IS NOT NULL AND upload_expires_at > ?
+        LIMIT 1
+      `
+    )
+      .bind(mediaId, uploadTokenHash, new Date().toISOString())
+      .first<UploadedMediaRow>()) ?? null
+  );
+}
+
+async function fetchLatestUploadedMediaJob(
+  mediaId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationJobRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT ${GENERATION_JOB_SELECT}
+        FROM generation_jobs
+        WHERE uploaded_media_id = ? AND workspace_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `
+    )
+      .bind(mediaId, workspaceId)
+      .first<GenerationJobRow>()) ?? null
+  );
+}
+
+async function fetchActiveUploadedMediaJob(
+  mediaId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationJobRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT ${GENERATION_JOB_SELECT}
+        FROM generation_jobs
+        WHERE uploaded_media_id = ? AND workspace_id = ? AND status IN ('queued', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `
+    )
+      .bind(mediaId, workspaceId)
+      .first<GenerationJobRow>()) ?? null
+  );
+}
+
+async function fetchTranscriptAssetsForMedia(
+  mediaId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationAssetSummary[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_ASSET_SELECT}
+      FROM generation_assets
+      WHERE generation_job_id = (
+        SELECT id
+        FROM generation_jobs
+        WHERE uploaded_media_id = ? AND workspace_id = ? AND job_type = 'transcription'
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      ORDER BY created_at ASC
+    `
+  )
+    .bind(mediaId, workspaceId)
+    .all<GenerationAssetRow>();
+
+  return results.map(toGenerationAssetSummary);
+}
+
+async function fetchUploadedMediaSegments(
+  mediaId: string,
+  env: Env
+): Promise<UploadedMediaSegment[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${UPLOADED_MEDIA_SEGMENT_SELECT}
+      FROM uploaded_media_segments
+      WHERE media_id = ?
+      ORDER BY segment_index ASC
+    `
+  )
+    .bind(mediaId)
+    .all<UploadedMediaSegmentRow>();
+
+  return results.map(toUploadedMediaSegment);
+}
+
+async function updateUploadedMediaStatusFromJob(
+  job: InternalGenerationJobRow,
+  env: Env
+): Promise<void> {
+  if (job.job_type !== "transcription" || !job.uploaded_media_id) return;
+
+  const now = new Date().toISOString();
+  if (job.status === "running") {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media
+        SET status = 'transcribing', error_message = NULL, updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(now, job.uploaded_media_id, job.workspace_id)
+      .run();
+    return;
+  }
+
+  if (job.status === "failed") {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media
+        SET status = 'failed', error_message = ?, updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(compactMessage(job.error_message ?? job.message), now, job.uploaded_media_id, job.workspace_id)
+      .run();
+    return;
+  }
+
+  if (job.status === "completed") {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media
+        SET status = 'completed', error_message = NULL, transcribed_at = COALESCE(transcribed_at, ?), updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(now, now, job.uploaded_media_id, job.workspace_id)
+      .run();
+  }
+}
+
+async function queueUploadedMediaTranscriptionJob(
+  media: UploadedMediaRow,
+  env: Env
+): Promise<GenerationJobSummary> {
+  const existing = await fetchActiveUploadedMediaJob(media.id, media.workspace_id, env);
+  if (existing) {
+    return toGenerationJobSummary(existing);
+  }
+
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const input = {
+    mediaId: media.id,
+    fileName: media.file_name,
+    mimeType: media.mime_type,
+    fileSizeBytes: Number(media.file_size_bytes ?? 0),
+    r2Key: media.r2_key,
+  };
+
+  await env.DB.prepare(
+    `
+      INSERT INTO generation_jobs (
+        id,
+        workspace_id,
+        project_id,
+        persona_model_id,
+        uploaded_media_id,
+        job_type,
+        provider,
+        provider_job_id,
+        status,
+        stage,
+        progress,
+        input_json,
+        output_json,
+        message,
+        error_message,
+        created_by_user_id,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, NULL, NULL, ?, 'transcription', 'internal', NULL, 'queued', 'queued', 0, ?, '{}', 'Queued for transcription', NULL, ?, NULL, NULL, ?, ?)
+    `
+  )
+    .bind(
+      jobId,
+      media.workspace_id,
+      media.id,
+      JSON.stringify(input),
+      media.created_by_user_id,
+      now,
+      now
+    )
+    .run();
+
+  await env.DB.prepare(
+    `
+      UPDATE uploaded_media
+      SET status = 'uploaded', error_message = NULL, updated_at = ?
+      WHERE id = ? AND workspace_id = ?
+    `
+  )
+    .bind(now, media.id, media.workspace_id)
+    .run();
+
+  const row = await fetchLatestUploadedMediaJob(media.id, media.workspace_id, env);
+  if (!row) {
+    throw new Error("Failed to queue transcription job");
+  }
+
+  return toGenerationJobSummary(row);
+}
+
 async function syncPersonaModelFromGenerationJob(
   job: InternalGenerationJobRow,
   targetStatus: "ready" | "failed",
@@ -1809,6 +2150,11 @@ async function updateInternalGenerationJob(
     binds.push(compactMessage(patch.message));
   }
 
+  if (patch.errorMessage !== undefined) {
+    assignments.push("error_message = ?");
+    binds.push(compactMessage(patch.errorMessage));
+  }
+
   if (patch.providerJobId !== undefined) {
     assignments.push("provider_job_id = ?");
     binds.push(patch.providerJobId);
@@ -1891,6 +2237,7 @@ async function patchGenerationJob(jobId: string, request: Request, env: Env): Pr
     );
 
     if (!updated) return jsonResponse({ error: "Generation job not found" }, 404);
+    await updateUploadedMediaStatusFromJob(updated, env);
     return jsonResponse({ job: { ...toGenerationJobSummary(updated), leaseToken } });
   } catch (error) {
     if (error instanceof Error && error.message === "Lease token mismatch") {
@@ -1950,6 +2297,7 @@ async function completeGenerationJob(
     .run();
 
   const completed = await fetchInternalGenerationJob(jobId, env);
+  await updateUploadedMediaStatusFromJob(completed ?? updated, env);
   if ((completed ?? updated).job_type === "persona_train") {
     await syncPersonaModelFromGenerationJob(completed ?? updated, "ready", env);
   }
@@ -2008,10 +2356,144 @@ async function failGenerationJob(jobId: string, request: Request, env: Env): Pro
     .run();
 
   const failed = await fetchInternalGenerationJob(jobId, env);
+  await updateUploadedMediaStatusFromJob(failed ?? updated, env);
   if ((failed ?? updated).job_type === "persona_train") {
     await syncPersonaModelFromGenerationJob(failed ?? updated, "failed", env);
   }
   return jsonResponse({ job: { ...toGenerationJobSummary(failed ?? updated), leaseToken: null } });
+}
+
+async function syncGenerationJobTranscript(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const leaseToken = readCallbackLeaseToken(request, undefined, payload?.leaseToken);
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const job = await fetchInternalGenerationJob(jobId, env);
+  if (!job) return jsonResponse({ error: "Generation job not found" }, 404);
+  if (job.lease_token !== leaseToken) {
+    return jsonResponse({ error: "Lease token mismatch" }, 409);
+  }
+  if (job.job_type !== "transcription" || !job.uploaded_media_id) {
+    return jsonResponse({ error: "Transcript sync is only available for transcription jobs" }, 400);
+  }
+
+  const transcriptText =
+    typeof payload.transcriptText === "string" ? payload.transcriptText.trim() : "";
+  const language =
+    typeof payload.language === "string" && payload.language.trim() ? payload.language.trim() : null;
+  const durationSec =
+    payload.durationSec === undefined || payload.durationSec === null
+      ? null
+      : Number(payload.durationSec);
+  const rawSegments = Array.isArray(payload.segments) ? payload.segments : [];
+  const segments = rawSegments
+    .map((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const segment = value as Record<string, unknown>;
+      const text = typeof segment.text === "string" ? segment.text.trim() : "";
+      if (!text) return null;
+      const startTime = Number(segment.startTime ?? segment.start ?? 0);
+      const endTime = Number(segment.endTime ?? segment.end ?? startTime);
+      return {
+        id: crypto.randomUUID(),
+        segmentIndex:
+          segment.segmentIndex === undefined || segment.segmentIndex === null
+            ? index
+            : Number(segment.segmentIndex),
+        startTime: Number.isFinite(startTime) ? startTime : 0,
+        endTime: Number.isFinite(endTime) ? endTime : Number.isFinite(startTime) ? startTime : 0,
+        text,
+        wordCount: countWords(text),
+      };
+    })
+    .filter((segment): segment is NonNullable<typeof segment> => Boolean(segment));
+
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(`DELETE FROM uploaded_media_segments WHERE media_id = ?`).bind(job.uploaded_media_id).run();
+
+  for (const segment of segments) {
+    await env.DB.prepare(
+      `
+        INSERT INTO uploaded_media_segments (
+          id,
+          media_id,
+          segment_index,
+          start_time,
+          end_time,
+          text,
+          word_count,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+      .bind(
+        segment.id,
+        job.uploaded_media_id,
+        segment.segmentIndex,
+        segment.startTime,
+        segment.endTime,
+        segment.text,
+        segment.wordCount,
+        now
+      )
+      .run();
+  }
+
+  await env.DB.prepare(
+    `
+      UPDATE uploaded_media
+      SET
+        language = ?,
+        duration_sec = ?,
+        transcript_text = ?,
+        transcript_word_count = ?,
+        segment_count = ?,
+        error_message = NULL,
+        updated_at = ?
+      WHERE id = ? AND workspace_id = ?
+    `
+  )
+    .bind(
+      language,
+      durationSec === null || !Number.isFinite(durationSec) ? null : durationSec,
+      transcriptText,
+      countWords(transcriptText),
+      segments.length,
+      now,
+      job.uploaded_media_id,
+      job.workspace_id
+    )
+    .run();
+
+  await recordGenerationJobEvent(
+    job.id,
+    {
+      message: `Stored transcript (${segments.length} segments)`,
+      progress: job.progress,
+      stage: job.stage,
+      status: job.status,
+    },
+    {
+      uploadedMediaId: job.uploaded_media_id,
+      segmentCount: segments.length,
+      transcriptWordCount: countWords(transcriptText),
+    },
+    env
+  );
+
+  return jsonResponse({
+    ok: true,
+    segmentCount: segments.length,
+    transcriptWordCount: countWords(transcriptText),
+  });
 }
 
 function sanitizeAssetFileName(fileName: string): string {
@@ -2171,6 +2653,62 @@ async function getGenerationJobDataset(
   const headers = new Headers({
     "cache-control": "no-store",
     "content-type": "application/x-ndjson; charset=utf-8",
+  });
+
+  return new Response(object.body, {
+    headers,
+    status: 200,
+  });
+}
+
+async function getGenerationJobSourceFile(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const url = new URL(request.url);
+  const leaseToken = readCallbackLeaseToken(request, url.searchParams);
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const job = await fetchCallbackGenerationJob(jobId, leaseToken, env);
+  if (!job) {
+    return jsonResponse({ error: "Generation job not found" }, 404);
+  }
+
+  if (job.job_type !== "transcription" || !job.uploaded_media_id) {
+    return jsonResponse({ error: "Source download is only available for transcription jobs" }, 400);
+  }
+
+  const media = await env.DB.prepare(
+    `
+      SELECT ${UPLOADED_MEDIA_SELECT}
+      FROM uploaded_media
+      WHERE id = ? AND workspace_id = ?
+      LIMIT 1
+    `
+  )
+    .bind(job.uploaded_media_id, job.workspace_id)
+    .first<UploadedMediaRow>();
+
+  if (!media || !media.r2_key) {
+    return jsonResponse({ error: "Source file not found" }, 404);
+  }
+
+  const object = await env.ASSETS.get(media.r2_key);
+  if (!object) {
+    return jsonResponse({ error: "Source blob not found" }, 404);
+  }
+
+  const headers = new Headers({
+    "cache-control": "no-store",
+    "content-type": media.mime_type,
+    "content-disposition": `attachment; filename="${media.file_name.replace(/"/g, "")}"`,
   });
 
   return new Response(object.body, {
@@ -3567,6 +4105,36 @@ async function handlePersonaModelsRoute(
   return jsonResponse({ error: "Not found" }, 404);
 }
 
+async function handleUploadedMediaRoute(
+  parts: string[],
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  if (!parts[2]) {
+    if (request.method === "GET") return listUploadedMedia(context, env);
+    if (request.method === "POST") return createUploadedMedia(request, context, env);
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  const mediaId = decodeURIComponent(parts[2]);
+
+  if (parts.length === 3) {
+    if (request.method === "GET") return getUploadedMedia(mediaId, context, env);
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  if (parts[3] === "transcribe" && request.method === "POST") {
+    return retryUploadedMediaTranscription(mediaId, context, env);
+  }
+
+  if (parts[3] === "file" && request.method === "GET") {
+    return getUploadedMediaSourceFile(mediaId, context, env);
+  }
+
+  return jsonResponse({ error: "Not found" }, 404);
+}
+
 function parseJsonObject(rawValue: string | null | undefined): JsonObject {
   if (!rawValue) return {};
 
@@ -3602,6 +4170,325 @@ function parseBoolean(rawValue: unknown, fallback = false): boolean {
     if (rawValue === "false") return false;
   }
   return fallback;
+}
+
+function sanitizeUploadedMediaFileName(fileName: string): string {
+  const normalized = fileName
+    .replace(/[^\w.\-()+\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+  return normalized || "upload.bin";
+}
+
+function countWords(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) return 0;
+  return normalized.split(/\s+/).filter(Boolean).length;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function listUploadedMedia(
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${UPLOADED_MEDIA_SELECT}
+      FROM uploaded_media
+      WHERE workspace_id = ?
+      ORDER BY created_at DESC
+      LIMIT 100
+    `
+  )
+    .bind(context.workspace.id)
+    .all<UploadedMediaRow>();
+
+  const items = await Promise.all(
+    results.map(async (row) => {
+      const latestJob = await fetchLatestUploadedMediaJob(row.id, context.workspace.id, env);
+      return toUploadedMediaSummary(row, latestJob ? toGenerationJobSummary(latestJob) : null);
+    })
+  );
+
+  const response: UploadedMediaListResponse = {
+    items,
+    count: items.length,
+  };
+
+  return jsonResponse(response);
+}
+
+async function createUploadedMedia(
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const fileName = sanitizeUploadedMediaFileName(String(payload.fileName ?? ""));
+  const mimeType = String(payload.mimeType ?? "").trim().toLowerCase();
+  const fileSizeBytes = Number(payload.fileSizeBytes ?? 0);
+
+  if (!fileName) {
+    return jsonResponse({ error: "fileName is required" }, 400);
+  }
+  if (!mimeType || !SUPPORTED_MEDIA_MIME_TYPES.has(mimeType)) {
+    return jsonResponse({ error: "Unsupported media type" }, 400);
+  }
+  if (!Number.isFinite(fileSizeBytes) || fileSizeBytes <= 0) {
+    return jsonResponse({ error: "fileSizeBytes must be a positive number" }, 400);
+  }
+  if (fileSizeBytes > MAX_MEDIA_UPLOAD_BYTES) {
+    return jsonResponse(
+      {
+        error: `Upload exceeds the ${Math.round(MAX_MEDIA_UPLOAD_BYTES / (1024 * 1024))} MB limit`,
+      },
+      413
+    );
+  }
+
+  const mediaId = crypto.randomUUID();
+  const uploadToken = `${crypto.randomUUID()}${crypto.randomUUID().replace(/-/g, "")}`;
+  const uploadTokenHash = await sha256Hex(uploadToken);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 15 * 60 * 1000).toISOString();
+  const createdAt = now.toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO uploaded_media (
+        id,
+        workspace_id,
+        created_by_user_id,
+        source_kind,
+        file_name,
+        mime_type,
+        file_size_bytes,
+        status,
+        upload_token_hash,
+        upload_expires_at,
+        r2_key,
+        duration_sec,
+        language,
+        transcript_text,
+        transcript_word_count,
+        segment_count,
+        error_message,
+        uploaded_at,
+        transcribed_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, 'upload', ?, ?, ?, 'awaiting_upload', ?, ?, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL, ?, ?)
+    `
+  )
+    .bind(
+      mediaId,
+      context.workspace.id,
+      context.session.user.id,
+      fileName,
+      mimeType,
+      fileSizeBytes,
+      uploadTokenHash,
+      expiresAt,
+      createdAt,
+      createdAt
+    )
+    .run();
+
+  const row = await fetchUploadedMediaRow(mediaId, context.workspace.id, env);
+  if (!row) {
+    return jsonResponse({ error: "Failed to create upload" }, 500);
+  }
+
+  const response: UploadedMediaCreateResponse = {
+    media: toUploadedMediaSummary(row, null),
+    uploadUrl: new URL(`/api/media/${encodeURIComponent(mediaId)}/upload?token=${encodeURIComponent(uploadToken)}`, request.url).toString(),
+    uploadExpiresAt: expiresAt,
+    maxUploadBytes: MAX_MEDIA_UPLOAD_BYTES,
+  };
+
+  return jsonResponse(response, 201);
+}
+
+async function getUploadedMedia(
+  mediaId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const row = await fetchUploadedMediaRow(mediaId, context.workspace.id, env);
+  if (!row) return jsonResponse({ error: "Media item not found" }, 404);
+
+  const [latestJob, transcriptAssets, segments] = await Promise.all([
+    fetchLatestUploadedMediaJob(mediaId, context.workspace.id, env),
+    fetchTranscriptAssetsForMedia(mediaId, context.workspace.id, env),
+    fetchUploadedMediaSegments(mediaId, env),
+  ]);
+
+  const response: UploadedMediaResponse = {
+    media: toUploadedMediaDetail(
+      row,
+      latestJob ? toGenerationJobSummary(latestJob) : null,
+      transcriptAssets,
+      segments
+    ),
+  };
+
+  return jsonResponse(response);
+}
+
+async function retryUploadedMediaTranscription(
+  mediaId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const row = await fetchUploadedMediaRow(mediaId, context.workspace.id, env);
+  if (!row) return jsonResponse({ error: "Media item not found" }, 404);
+  if (!row.r2_key) {
+    return jsonResponse({ error: "Upload is not complete yet" }, 409);
+  }
+
+  await queueUploadedMediaTranscriptionJob(row, env);
+  return getUploadedMedia(mediaId, context, env);
+}
+
+async function getUploadedMediaSourceFile(
+  mediaId: string,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const row = await fetchUploadedMediaRow(mediaId, context.workspace.id, env);
+  if (!row) return jsonResponse({ error: "Media item not found" }, 404);
+  if (!row.r2_key) return jsonResponse({ error: "Original upload is unavailable" }, 404);
+
+  const object = await env.ASSETS.get(row.r2_key);
+  if (!object) return jsonResponse({ error: "Source file not found" }, 404);
+
+  const headers = new Headers();
+  headers.set("content-type", row.mime_type);
+  headers.set("cache-control", "private, max-age=60");
+  headers.set(
+    "content-disposition",
+    `${row.mime_type.startsWith("audio/") || row.mime_type.startsWith("video/") ? "inline" : "attachment"}; filename="${row.file_name.replace(/"/g, "")}"`
+  );
+  headers.set("content-length", String(row.file_size_bytes));
+
+  return new Response(object.body, {
+    status: 200,
+    headers,
+  });
+}
+
+async function uploadMediaFile(
+  mediaId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (request.method !== "PUT") {
+    return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "ASSETS bucket binding is not configured" }, 500);
+  }
+
+  const url = new URL(request.url);
+  const uploadToken = url.searchParams.get("token")?.trim() ?? "";
+  if (!uploadToken) {
+    return jsonResponse({ error: "Upload token is required" }, 400);
+  }
+
+  const tokenHash = await sha256Hex(uploadToken);
+  const media = await fetchUploadedMediaByToken(mediaId, tokenHash, env);
+  if (!media) {
+    return jsonResponse({ error: "Upload link is invalid or expired" }, 404);
+  }
+
+  const contentLengthHeader = request.headers.get("content-length");
+  const declaredContentLength = parseInteger(contentLengthHeader);
+  if (declaredContentLength !== null && declaredContentLength > MAX_MEDIA_UPLOAD_BYTES) {
+    return jsonResponse(
+      { error: `Upload exceeds the ${Math.round(MAX_MEDIA_UPLOAD_BYTES / (1024 * 1024))} MB limit` },
+      413
+    );
+  }
+
+  const contentType = (request.headers.get("content-type") ?? media.mime_type).trim().toLowerCase();
+  if (!SUPPORTED_MEDIA_MIME_TYPES.has(contentType)) {
+    return jsonResponse({ error: "Unsupported media type" }, 400);
+  }
+
+  const body = await request.arrayBuffer();
+  if (body.byteLength <= 0) {
+    return jsonResponse({ error: "Upload body is empty" }, 400);
+  }
+  if (body.byteLength > MAX_MEDIA_UPLOAD_BYTES) {
+    return jsonResponse(
+      { error: `Upload exceeds the ${Math.round(MAX_MEDIA_UPLOAD_BYTES / (1024 * 1024))} MB limit` },
+      413
+    );
+  }
+
+  const r2Key = ["uploaded-media", media.workspace_id, media.id, sanitizeUploadedMediaFileName(media.file_name)].join("/");
+  await env.ASSETS.put(r2Key, body, {
+    httpMetadata: {
+      contentType,
+      contentDisposition: `inline; filename="${media.file_name.replace(/"/g, "")}"`,
+    },
+  });
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `
+      UPDATE uploaded_media
+      SET
+        mime_type = ?,
+        file_size_bytes = ?,
+        status = 'uploaded',
+        upload_token_hash = NULL,
+        upload_expires_at = NULL,
+        r2_key = ?,
+        error_message = NULL,
+        uploaded_at = ?,
+        updated_at = ?
+      WHERE id = ? AND workspace_id = ?
+    `
+  )
+    .bind(
+      contentType,
+      body.byteLength,
+      r2Key,
+      now,
+      now,
+      media.id,
+      media.workspace_id
+    )
+    .run();
+
+  const updated = await fetchUploadedMediaRow(media.id, media.workspace_id, env);
+  if (!updated) {
+    return jsonResponse({ error: "Upload completed but media record is unavailable" }, 500);
+  }
+
+  const latestJob = await queueUploadedMediaTranscriptionJob(updated, env);
+  const response: UploadedMediaResponse = {
+    media: toUploadedMediaDetail(updated, latestJob, [], []),
+  };
+
+  return jsonResponse(response, 201);
 }
 
 function toThumbnailAnalysisSummary(
@@ -4138,6 +5025,7 @@ function toGenerationJobSummary(row: GenerationJobRow): GenerationJobSummary {
     id: row.id,
     projectId: row.project_id,
     personaModelId: row.persona_model_id,
+    uploadedMediaId: row.uploaded_media_id,
     jobType: row.job_type,
     provider: row.provider,
     providerJobId: row.provider_job_id,
@@ -4169,6 +5057,57 @@ function toGenerationAssetSummary(row: GenerationAssetRow): GenerationAssetSumma
     metadata: parseJsonObject(row.metadata_json),
     createdAt: row.created_at,
     downloadPath: `/api/assets/${encodeURIComponent(row.id)}`,
+  };
+}
+
+function toUploadedMediaSegment(row: UploadedMediaSegmentRow): UploadedMediaSegment {
+  return {
+    id: row.id,
+    segmentIndex: Number(row.segment_index ?? 0),
+    startTime: Number(row.start_time ?? 0),
+    endTime: Number(row.end_time ?? 0),
+    timestampLabel: buildTimestampLabel(Number(row.start_time ?? 0)),
+    text: row.text,
+    wordCount: Number(row.word_count ?? 0),
+  };
+}
+
+function toUploadedMediaSummary(
+  row: UploadedMediaRow,
+  latestJob: GenerationJobSummary | null
+): UploadedMediaSummary {
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    fileSizeBytes: Number(row.file_size_bytes ?? 0),
+    status: row.status,
+    durationSec: row.duration_sec === null || row.duration_sec === undefined ? null : Number(row.duration_sec),
+    language: row.language,
+    transcriptWordCount: Number(row.transcript_word_count ?? 0),
+    segmentCount: Number(row.segment_count ?? 0),
+    errorMessage: row.error_message,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    uploadedAt: row.uploaded_at,
+    transcribedAt: row.transcribed_at,
+    sourceDownloadPath: row.r2_key ? `/api/media/${encodeURIComponent(row.id)}/file` : null,
+    latestJob,
+  };
+}
+
+function toUploadedMediaDetail(
+  row: UploadedMediaRow,
+  latestJob: GenerationJobSummary | null,
+  transcriptAssets: GenerationAssetSummary[],
+  segments: UploadedMediaSegment[]
+): UploadedMediaDetail {
+  return {
+    ...toUploadedMediaSummary(row, latestJob),
+    transcriptText: row.transcript_text,
+    transcriptAssets,
+    segments,
   };
 }
 
@@ -6027,6 +6966,7 @@ async function createGenerationJob(
     message?: string | null;
     output: JsonObject;
     personaModelId: string | null;
+    uploadedMediaId?: string | null;
     progress: number;
     projectId: string | null;
     provider: string;
@@ -6047,6 +6987,7 @@ async function createGenerationJob(
         workspace_id,
         project_id,
         persona_model_id,
+        uploaded_media_id,
         job_type,
         provider,
         provider_job_id,
@@ -6062,7 +7003,7 @@ async function createGenerationJob(
         completed_at,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
     `
   )
     .bind(
@@ -6070,6 +7011,7 @@ async function createGenerationJob(
       context.workspace.id,
       params.projectId,
       params.personaModelId,
+      params.uploadedMediaId ?? null,
       params.jobType,
       params.provider,
       params.providerJobId,
@@ -6089,6 +7031,7 @@ async function createGenerationJob(
     id: jobId,
     projectId: params.projectId,
     personaModelId: params.personaModelId,
+    uploadedMediaId: params.uploadedMediaId ?? null,
     jobType: params.jobType,
     provider: params.provider,
     providerJobId: params.providerJobId,

@@ -5,6 +5,7 @@ import { useMemo, type ReactNode } from "react";
 import { useParams, usePathname } from "next/navigation";
 import type { ChannelSummary } from "@ytscan/core";
 import {
+  Captions,
   ChevronDown,
   LayoutGrid,
   Menu,
@@ -55,6 +56,13 @@ const sidebarItems: SidebarItem[] = [
     icon: LayoutGrid,
     href: () => "/app/channels",
     active: (pathname) => pathname.startsWith("/app/channels") || pathname.startsWith("/app/scans"),
+  },
+  {
+    key: "transcribe",
+    label: "Transcribe",
+    icon: Captions,
+    href: () => "/app/transcribe",
+    active: (pathname) => pathname.startsWith("/app/transcribe"),
   },
   {
     key: "settings",

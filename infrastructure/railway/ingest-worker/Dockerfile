@@ -7,7 +7,9 @@ RUN apt-get update \
     ffmpeg \
     python3 \
     python3-pip \
-  && python3 -m pip install --no-cache-dir --break-system-packages yt-dlp \
+  && python3 -m pip install --no-cache-dir --break-system-packages \
+    faster-whisper \
+    yt-dlp \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 

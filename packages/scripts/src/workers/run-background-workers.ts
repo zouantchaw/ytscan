@@ -30,7 +30,7 @@ const workerDefinitions: WorkerDefinition[] = [
   {
     name: "media",
     args: ["run", "media:run"],
-    enabled: () => Boolean(process.env.GEMINI_API_KEY?.trim()),
+    enabled: () => true,
   },
 ];
 

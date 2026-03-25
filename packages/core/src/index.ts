@@ -350,6 +350,7 @@ export type GenerationJobSummary = {
   id: string;
   projectId: string | null;
   personaModelId: string | null;
+  uploadedMediaId: string | null;
   jobType: string;
   provider: string;
   providerJobId: string | null;
@@ -379,6 +380,65 @@ export type GenerationAssetSummary = {
   metadata: JsonObject;
   createdAt: string;
   downloadPath: string;
+};
+
+export type UploadedMediaStatus =
+  | "awaiting_upload"
+  | "uploaded"
+  | "transcribing"
+  | "completed"
+  | "failed";
+
+export type UploadedMediaSegment = {
+  id: string;
+  segmentIndex: number;
+  startTime: number;
+  endTime: number;
+  timestampLabel: string;
+  text: string;
+  wordCount: number;
+};
+
+export type UploadedMediaSummary = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  status: UploadedMediaStatus | string;
+  durationSec: number | null;
+  language: string | null;
+  transcriptWordCount: number;
+  segmentCount: number;
+  errorMessage: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  uploadedAt: string | null;
+  transcribedAt: string | null;
+  sourceDownloadPath: string | null;
+  latestJob: GenerationJobSummary | null;
+};
+
+export type UploadedMediaDetail = UploadedMediaSummary & {
+  transcriptText: string | null;
+  transcriptAssets: GenerationAssetSummary[];
+  segments: UploadedMediaSegment[];
+};
+
+export type UploadedMediaListResponse = {
+  items: UploadedMediaSummary[];
+  count: number;
+};
+
+export type UploadedMediaResponse = {
+  media: UploadedMediaDetail;
+};
+
+export type UploadedMediaCreateResponse = {
+  media: UploadedMediaSummary;
+  uploadUrl: string;
+  uploadExpiresAt: string;
+  maxUploadBytes: number;
 };
 
 export type ScriptProjectSummary = {

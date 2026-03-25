@@ -29,6 +29,9 @@ const GEMINI_THUMBNAIL_IMAGE_MODEL =
 const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
 const GEMINI_TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Kore";
 const PREVIS_SCENE_DURATION_SECONDS = Number(process.env.PREVIS_SCENE_DURATION_SECONDS || "5");
+const WHISPER_MODEL_SIZE = process.env.WHISPER_MODEL_SIZE || "small";
+const WHISPER_COMPUTE_TYPE = process.env.WHISPER_COMPUTE_TYPE || "int8";
+const WHISPER_DEVICE = process.env.WHISPER_DEVICE || "cpu";
 const GENERATED_MEDIA_ROOT = path.resolve(MONOREPO_ROOT, "data/generated-media");
 
 type JsonObject = Record<string, unknown>;
@@ -37,6 +40,7 @@ type GenerationJob = {
   id: string;
   projectId: string | null;
   personaModelId: string | null;
+  uploadedMediaId: string | null;
   jobType: string;
   provider: string;
   providerJobId: string | null;
@@ -95,6 +99,20 @@ type PrevisJobInput = ThumbnailJobInput & {
   thumbnailBriefContent?: string;
 };
 
+type TranscriptionJobInput = {
+  fileName?: string;
+  mediaId?: string;
+  mimeType?: string;
+  r2Key?: string | null;
+};
+
+type TranscriptSegmentPayload = {
+  segmentIndex: number;
+  startTime: number;
+  endTime: number;
+  text: string;
+};
+
 type ScenePlan = {
   caption: string;
   prompt: string;
@@ -102,16 +120,16 @@ type ScenePlan = {
 };
 
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
+const ENABLED_MEDIA_JOB_TYPES = ai
+  ? ["thumbnail_images", "previs", "transcription"]
+  : ["transcription"];
+const ENABLED_MEDIA_PROVIDERS = ai ? ["gemini", "internal"] : ["internal"];
 
 function assertWorkerEnvironment(): void {
   const missing: string[] = [];
 
   if (!INTERNAL_RUNNER_TOKEN) {
     missing.push("INTERNAL_RUNNER_TOKEN");
-  }
-
-  if (!GEMINI_API_KEY) {
-    missing.push("GEMINI_API_KEY");
   }
 
   if (missing.length) {
@@ -192,12 +210,12 @@ async function leaseJob(jobId?: string): Promise<LeasedGenerationJob | null> {
         jobId
           ? {
               jobId,
-              jobTypes: ["thumbnail_images", "previs"],
-              providers: ["gemini", "internal"],
+              jobTypes: ENABLED_MEDIA_JOB_TYPES,
+              providers: ENABLED_MEDIA_PROVIDERS,
             }
           : {
-              jobTypes: ["thumbnail_images", "previs"],
-              providers: ["gemini", "internal"],
+              jobTypes: ENABLED_MEDIA_JOB_TYPES,
+              providers: ENABLED_MEDIA_PROVIDERS,
             }
       ),
     }
@@ -311,6 +329,92 @@ async function uploadAsset(
 
   const payload = (await response.json()) as { asset: GenerationAsset };
   return payload.asset;
+}
+
+async function downloadTranscriptionSource(job: LeasedGenerationJob, outputDir: string): Promise<string> {
+  const headers = new Headers();
+  headers.set("x-internal-token", INTERNAL_RUNNER_TOKEN);
+  headers.set("x-generation-lease-token", job.leaseToken);
+
+  const response = await fetch(`${API_BASE_URL}/api/internal/generation-jobs/${job.id}/source`, {
+    method: "GET",
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Source download failed (${response.status} ${response.statusText}): ${await response.text()}`);
+  }
+
+  const contentDisposition = response.headers.get("content-disposition") || "";
+  const match = contentDisposition.match(/filename="([^"]+)"/);
+  const fileName = sanitizeName(match?.[1] || `${job.uploadedMediaId ?? job.id}.bin`);
+  const filePath = path.join(outputDir, fileName);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+async function syncTranscriptResult(
+  job: LeasedGenerationJob,
+  payload: {
+    durationSec: number | null;
+    language: string | null;
+    segments: Array<{ endTime: number; segmentIndex: number; startTime: number; text: string }>;
+    transcriptText: string;
+  }
+): Promise<void> {
+  await apiJsonRequest(`/api/internal/generation-jobs/${job.id}/transcript`, {
+    method: "POST",
+    body: JSON.stringify({
+      leaseToken: job.leaseToken,
+      ...payload,
+    }),
+  });
+}
+
+async function runPythonJson(command: string, args: string[], cwd = MONOREPO_ROOT): Promise<JsonObject> {
+  return await new Promise<JsonObject>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      process.stdout.write(chunk.toString());
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      process.stderr.write(chunk.toString());
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`${command} exited with code ${code}: ${stderr.trim() || stdout.trim()}`));
+        return;
+      }
+
+      const lines = stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const jsonLine = [...lines].reverse().find((line) => line.startsWith("{") && line.endsWith("}"));
+      if (!jsonLine) {
+        reject(new Error(`Expected JSON output from ${command} but none was found.`));
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(jsonLine) as JsonObject);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 async function fetchReferenceImageParts(referenceImages: ReferenceImage[], limit = 2) {
@@ -736,6 +840,121 @@ async function handlePrevis(job: LeasedGenerationJob): Promise<JsonObject> {
   };
 }
 
+async function handleTranscription(job: LeasedGenerationJob): Promise<JsonObject> {
+  const input = job.input as TranscriptionJobInput;
+  const outputDir = path.join(GENERATED_MEDIA_ROOT, job.id);
+  ensureDir(outputDir);
+
+  await patchJob(job, {
+    stage: "downloading",
+    progress: 0.05,
+    message: "Downloading source media",
+  });
+
+  const sourcePath = await downloadTranscriptionSource(job, outputDir);
+
+  await patchJob(job, {
+    stage: "extracting_audio",
+    progress: 0.18,
+    message: "Preparing audio for transcription",
+  });
+
+  const scriptPath = path.resolve(MONOREPO_ROOT, "packages/scripts/src/transcription/transcribe_media.py");
+  const result = await runPythonJson("python3", [
+    scriptPath,
+    "--input",
+    sourcePath,
+    "--output-dir",
+    outputDir,
+    "--model-size",
+    WHISPER_MODEL_SIZE,
+    "--compute-type",
+    WHISPER_COMPUTE_TYPE,
+    "--device",
+    WHISPER_DEVICE,
+  ]);
+
+  const transcriptText =
+    typeof result.transcriptText === "string" ? result.transcriptText : "";
+  const rawSegments = Array.isArray(result.segments) ? result.segments : [];
+  const segments = rawSegments
+    .map((segment, index) => {
+      if (!segment || typeof segment !== "object" || Array.isArray(segment)) return null;
+      const value = segment as Record<string, unknown>;
+      return {
+        segmentIndex:
+          value.segmentIndex === undefined || value.segmentIndex === null
+            ? index
+            : Number(value.segmentIndex),
+        startTime: Number(value.startTime ?? 0),
+        endTime: Number(value.endTime ?? 0),
+        text: typeof value.text === "string" ? value.text : "",
+      };
+    })
+    .filter((segment): segment is TranscriptSegmentPayload => {
+      if (!segment) return false;
+      return Boolean(segment.text.trim());
+    });
+
+  await patchJob(job, {
+    stage: "transcribing",
+    progress: 0.78,
+    message: `Transcribed ${segments.length} segments`,
+  });
+
+  await syncTranscriptResult(job, {
+    transcriptText,
+    segments,
+    language: typeof result.language === "string" ? result.language : null,
+    durationSec:
+      result.durationSec === undefined || result.durationSec === null ? null : Number(result.durationSec),
+  });
+
+  const fileMap =
+    result.files && typeof result.files === "object" && !Array.isArray(result.files)
+      ? (result.files as Record<string, unknown>)
+      : {};
+  const transcriptAssets: GenerationAsset[] = [];
+  const uploads: Array<{ assetKind: string; key: string; mimeType: string }> = [
+    { assetKind: "transcript_text", key: "txt", mimeType: "text/plain; charset=utf-8" },
+    { assetKind: "transcript_srt", key: "srt", mimeType: "application/x-subrip" },
+    { assetKind: "transcript_vtt", key: "vtt", mimeType: "text/vtt; charset=utf-8" },
+    { assetKind: "transcript_json", key: "json", mimeType: "application/json; charset=utf-8" },
+  ];
+
+  await patchJob(job, {
+    stage: "packaging",
+    progress: 0.9,
+    message: "Uploading transcript files",
+  });
+
+  for (const upload of uploads) {
+    const rawFilePathValue = fileMap[upload.key];
+    const filePathValue = typeof rawFilePathValue === "string" ? rawFilePathValue : null;
+    if (!filePathValue || !fs.existsSync(filePathValue)) continue;
+    const asset = await uploadAsset(job, {
+      assetKind: upload.assetKind,
+      fileName: path.basename(filePathValue),
+      filePath: filePathValue,
+      mimeType: upload.mimeType,
+      metadata: {
+        mediaId: job.uploadedMediaId,
+      },
+    });
+    transcriptAssets.push(asset);
+  }
+
+  return {
+    uploadedMediaId: job.uploadedMediaId,
+    language: typeof result.language === "string" ? result.language : null,
+    durationSec:
+      result.durationSec === undefined || result.durationSec === null ? null : Number(result.durationSec),
+    segmentCount: segments.length,
+    transcriptAssetIds: transcriptAssets.map((asset) => asset.id),
+    transcriptWordCount: transcriptText.trim() ? transcriptText.trim().split(/\s+/).length : 0,
+  };
+}
+
 async function withHeartbeat<T>(job: LeasedGenerationJob, work: () => Promise<T>): Promise<T> {
   const timer = setInterval(() => {
     void heartbeatJob(job).catch((error) => {
@@ -756,6 +975,8 @@ async function processJob(job: LeasedGenerationJob): Promise<void> {
 
   const result = await withHeartbeat(job, async () => {
     switch (job.jobType) {
+      case "transcription":
+        return await handleTranscription(job);
       case "thumbnail_images":
         return await handleThumbnailImages(job);
       case "previs":
