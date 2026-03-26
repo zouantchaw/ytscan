@@ -228,8 +228,8 @@ export default function UploadedMediaDetailPage() {
         <EmptyState
           title="Media not found"
           description="We couldn't find that uploaded file in your workspace."
-          actionLabel="Back to transcript archive"
-          actionHref="/app/transcribe"
+          actionLabel="Back to archive"
+          actionHref="/app/archive"
         />
       </main>
     );
@@ -239,8 +239,8 @@ export default function UploadedMediaDetailPage() {
     <main className="app-page py-8">
       <div className="grid gap-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Link href="/app/transcribe" className="hover:text-foreground">
-            Transcript Archive
+          <Link href="/app/archive" className="hover:text-foreground">
+            Archive
           </Link>
           <span>/</span>
           <span className="text-foreground">{media.fileName}</span>

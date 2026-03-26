@@ -1,12 +1,10 @@
 import { redirect } from "next/navigation";
 
-type ChannelComparePickerPageProps = {
-  params: Promise<{ slug: string }>;
-};
-
-export default async function ChannelComparePickerPage({
+export default async function LegacyChannelComparePickerPage({
   params,
-}: ChannelComparePickerPageProps) {
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   redirect(`/app/channels/${slug}`);
 }

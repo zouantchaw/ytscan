@@ -94,14 +94,14 @@ export default function ChannelSelectorPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
             <h1 className="font-display text-[52px] font-semibold tracking-[-0.05em] text-foreground">
-              Your Channels
+              Imported Channels
             </h1>
             <p className="text-[15px] leading-7 text-muted-foreground">
-              Select a scanned YouTube channel to open its historical dashboard and searchable archive.
+              Browse the YouTube channels you have already imported, then open each one to inspect its historical dashboard, video archive, and transcript search.
             </p>
           </div>
           <Button asChild>
-            <Link href="/app/scans/new">+ Scan Channel</Link>
+            <Link href="/app/import">+ Import Content</Link>
           </Button>
         </div>
 
@@ -121,10 +121,10 @@ export default function ChannelSelectorPage() {
           </div>
         ) : (
           <EmptyState
-            title="No channels yet"
-            description="Start by scanning a YouTube channel. Once the ingest job completes, it will appear here."
-            actionLabel="+ Scan New Channel"
-            actionHref="/app/scans/new"
+            title="No channels imported yet"
+            description="Import a YouTube channel archive to start building a searchable historical dashboard."
+            actionLabel="+ Import Content"
+            actionHref="/app/import"
           />
         )}
       </section>

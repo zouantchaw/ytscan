@@ -1,12 +1,10 @@
 import { redirect } from "next/navigation";
 
-type ChannelOpportunitiesPageProps = {
-  params: Promise<{ slug: string }>;
-};
-
-export default async function ChannelOpportunitiesPage({
+export default async function LegacyChannelOpportunitiesPage({
   params,
-}: ChannelOpportunitiesPageProps) {
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   redirect(`/app/channels/${slug}`);
 }

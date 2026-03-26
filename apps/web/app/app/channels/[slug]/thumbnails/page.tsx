@@ -1,12 +1,10 @@
 import { redirect } from "next/navigation";
 
-type LegacyChannelThumbnailsPageProps = {
-  params: Promise<{ slug: string }>;
-};
-
 export default async function LegacyChannelThumbnailsPage({
   params,
-}: LegacyChannelThumbnailsPageProps) {
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
-  redirect(`/app/channels/${slug}/videos`);
+  redirect(`/app/channels/${slug}`);
 }

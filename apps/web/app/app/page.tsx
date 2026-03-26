@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function AppHomePage() {
-  redirect("/app/channels");
+  redirect("/app/archive");
 }

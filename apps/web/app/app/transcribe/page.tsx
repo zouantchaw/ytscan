@@ -86,7 +86,7 @@ function UploadedMediaCard({ media }: { media: UploadedMediaSummary }) {
     );
 
   return (
-    <Link href={`/app/transcribe/${media.id}`} className="block">
+    <Link href={`/app/archive/${media.id}`} className="block">
       <AppPanel className="grid gap-4 px-5 py-5 transition-transform duration-200 hover:-translate-y-0.5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -207,7 +207,7 @@ export default function TranscribePage() {
         fileInputRef.current.value = "";
       }
       uploads.refetch();
-      router.push(`/app/transcribe/${created.media.id}`);
+      router.push(`/app/archive/${created.media.id}`);
     } catch (error) {
       if (error instanceof BackendError) {
         setUploadError(error.message);
@@ -228,20 +228,20 @@ export default function TranscribePage() {
           <AppPanel className="grid gap-6 px-7 py-7">
             <div className="space-y-2">
               <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                Video Transcription
+                Content Archive
               </p>
               <h1 className="font-display text-[44px] font-semibold tracking-[-0.05em] text-foreground">
-                Upload a video. Get a clean transcript.
+                Import media and build a searchable transcript archive.
               </h1>
               <p className="max-w-[720px] text-[15px] leading-7 text-muted-foreground">
-                Drop in a source file, let the worker run Whisper, then search, review, and export the transcript with timestamps.
+                Upload audio or video files, let the worker generate a timestamped transcript, then search, review, and export everything from one place.
               </p>
             </div>
 
             <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleUploadSubmit}>
               <div className="grid gap-3">
                 <label className="text-[15px] font-medium text-foreground" htmlFor="transcribe-upload">
-                  Source file
+                  Import a source file
                 </label>
                 <div
                   className={[
@@ -346,7 +346,7 @@ export default function TranscribePage() {
                 {activeCount}
               </p>
               <p className="text-sm text-muted-foreground">
-                active transcription job{activeCount === 1 ? "" : "s"}
+                active archive processing job{activeCount === 1 ? "" : "s"}
               </p>
             </div>
             <div className="space-y-3 text-sm text-muted-foreground">
@@ -390,7 +390,7 @@ export default function TranscribePage() {
           ) : (
             <EmptyState
               title="No uploads yet"
-              description="Upload your first source file to build a searchable transcript archive."
+              description="Import your first source file to build a searchable transcript archive."
             />
           )}
         </section>
