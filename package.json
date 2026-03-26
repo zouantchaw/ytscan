@@ -13,6 +13,7 @@
     "dev:api": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/api run dev",
     "build:web": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/web run build",
     "lint:web": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/web run lint",
+    "test:api": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/api run test",
     "test:scripts": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix packages/scripts run test",
     "deploy": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/api run deploy",
     "typecheck": "PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/web run typecheck && PATH=/usr/local/opt/node/bin:$PATH npm --prefix apps/api run typecheck && PATH=/usr/local/opt/node/bin:$PATH npm --prefix packages/core run typecheck && PATH=/usr/local/opt/node/bin:$PATH npm --prefix packages/scripts run typecheck",

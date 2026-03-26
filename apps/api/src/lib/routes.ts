@@ -2137,6 +2137,43 @@ async function queueUploadedMediaTranslationJob(
     transcriptWordCount: Number(media.transcript_word_count ?? 0),
   };
 
+  await env.DB.prepare(
+    `
+      INSERT INTO generation_jobs (
+        id,
+        workspace_id,
+        project_id,
+        persona_model_id,
+        uploaded_media_id,
+        job_type,
+        provider,
+        provider_job_id,
+        status,
+        stage,
+        progress,
+        input_json,
+        output_json,
+        message,
+        error_message,
+        created_by_user_id,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, NULL, NULL, ?, 'translation', 'gemini', NULL, 'queued', 'queued', 0, ?, '{}', 'Queued for translation', NULL, ?, NULL, NULL, ?, ?)
+    `
+  )
+    .bind(
+      jobId,
+      media.workspace_id,
+      media.id,
+      JSON.stringify(input),
+      context.session.user.id,
+      now,
+      now
+    )
+    .run();
+
   if (!translation) {
     await env.DB.prepare(
       `
@@ -2197,43 +2234,6 @@ async function queueUploadedMediaTranslationJob(
       .bind(translationId)
       .run();
   }
-
-  await env.DB.prepare(
-    `
-      INSERT INTO generation_jobs (
-        id,
-        workspace_id,
-        project_id,
-        persona_model_id,
-        uploaded_media_id,
-        job_type,
-        provider,
-        provider_job_id,
-        status,
-        stage,
-        progress,
-        input_json,
-        output_json,
-        message,
-        error_message,
-        created_by_user_id,
-        started_at,
-        completed_at,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, NULL, NULL, ?, 'translation', 'gemini', NULL, 'queued', 'queued', 0, ?, '{}', 'Queued for translation', NULL, ?, NULL, NULL, ?, ?)
-    `
-  )
-    .bind(
-      jobId,
-      media.workspace_id,
-      media.id,
-      JSON.stringify(input),
-      context.session.user.id,
-      now,
-      now
-    )
-    .run();
 
   translation = await fetchUploadedMediaTranslation(
     media.id,

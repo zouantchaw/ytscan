@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev --remote",
     "deploy": "wrangler deploy",
+    "test": "PATH=/usr/local/opt/node/bin:$PATH node --test src/**/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
