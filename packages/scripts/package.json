@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build:artifacts": "tsx src/ingest/build-channel-artifacts.ts",
     "vectorize:upsert": "tsx src/vectorize/upsert-transcript-chunks.ts",

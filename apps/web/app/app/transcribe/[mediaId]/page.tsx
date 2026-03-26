@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import type {
   GenerationAssetSummary,
   UploadedMediaResponse,
+  UploadedMediaTranslation,
 } from "@ytscan/core";
 import {
   AppPanel,
@@ -59,6 +60,27 @@ function mediaStatusVariant(status: string): "secondary" | "success" | "destruct
   return "secondary";
 }
 
+function translationStatusLabel(status: string) {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "translating":
+      return "Translating";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    default:
+      return status;
+  }
+}
+
+function translationStatusVariant(status: string): "secondary" | "success" | "destructive" {
+  if (status === "completed") return "success";
+  if (status === "failed") return "destructive";
+  return "secondary";
+}
+
 function progressPercent(progress: number | null | undefined) {
   return Math.max(0, Math.min(100, Math.round((progress ?? 0) * 100)));
 }
@@ -73,7 +95,7 @@ function assetIconForKind(kind: string) {
   return <FileText className="size-4" />;
 }
 
-function TranscriptAssetLink({ asset }: { asset: GenerationAssetSummary }) {
+function AssetLink({ asset }: { asset: GenerationAssetSummary }) {
   return (
     <a
       href={buildBackendUrl(asset.downloadPath)}
@@ -129,10 +151,14 @@ export default function UploadedMediaDetailPage() {
     pollMs: 5000,
   });
   const [isRetrying, startRetry] = useTransition();
+  const [isTranslating, startTranslation] = useTransition();
   const [isCopying, startCopy] = useTransition();
   const [searchQuery, setSearchQuery] = useState("");
+  const [translationSearchQuery, setTranslationSearchQuery] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [translationCopyState, setTranslationCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
+  const [translationFeedback, setTranslationFeedback] = useState<string | null>(null);
 
   const media = detail.data?.media ?? null;
   const latestJob = media?.latestJob ?? null;
@@ -166,6 +192,26 @@ export default function UploadedMediaDetailPage() {
     media?.segments
       .map((segment) => `${segment.timestampLabel} ${segment.text}`)
       .join("\n") ?? "";
+  const translation: UploadedMediaTranslation | null =
+    media?.translations.find((item) => item.targetLanguage.toLowerCase().startsWith("en")) ??
+    media?.translations[0] ??
+    null;
+  const translationPercent = progressPercent(translation?.latestJob?.progress);
+  const isTranslationActive = translation?.status === "queued" || translation?.status === "translating";
+  const translationText = translation?.segments.map((segment) => segment.text).join("\n") ?? translation?.translatedText ?? "";
+  const translationWithTimestamps =
+    translation?.segments
+      .map((segment) => `${segment.timestampLabel} ${segment.text}`)
+      .join("\n") ?? "";
+  const filteredTranslationSegments = useMemo(() => {
+    const segments = translation?.segments ?? [];
+    const query = translationSearchQuery.trim().toLowerCase();
+    if (!query) return segments;
+    return segments.filter((segment) => {
+      const haystack = `${segment.timestampLabel} ${segment.text}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [translation?.segments, translationSearchQuery]);
 
   function handleRetry() {
     startRetry(async () => {
@@ -182,6 +228,24 @@ export default function UploadedMediaDetailPage() {
     });
   }
 
+  function handleTranslate() {
+    startTranslation(async () => {
+      setTranslationFeedback(null);
+      try {
+        await fetchBackend(`/media/${encodeURIComponent(mediaId)}/translate`, {
+          method: "POST",
+          body: JSON.stringify({
+            targetLanguage: "en",
+          }),
+        });
+        setTranslationFeedback("English translation queued. The worker will pick it up automatically.");
+        detail.refetch();
+      } catch (error) {
+        setTranslationFeedback(error instanceof Error ? error.message : "Translation failed to queue.");
+      }
+    });
+  }
+
   function copyTranscript(kind: "plain" | "timestamps") {
     const text = kind === "timestamps" ? transcriptWithTimestamps : transcriptText;
     if (!text.trim()) return;
@@ -194,6 +258,22 @@ export default function UploadedMediaDetailPage() {
       } catch {
         setCopyState("error");
         window.setTimeout(() => setCopyState("idle"), 2200);
+      }
+    });
+  }
+
+  function copyTranslation(kind: "plain" | "timestamps") {
+    const text = kind === "timestamps" ? translationWithTimestamps : translationText;
+    if (!text.trim()) return;
+
+    startCopy(async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        setTranslationCopyState("copied");
+        window.setTimeout(() => setTranslationCopyState("idle"), 2200);
+      } catch {
+        setTranslationCopyState("error");
+        window.setTimeout(() => setTranslationCopyState("idle"), 2200);
       }
     });
   }
@@ -288,6 +368,22 @@ export default function UploadedMediaDetailPage() {
                     {isRetrying ? "Retrying..." : "Retry"}
                   </Button>
                 ) : null}
+                {media.status === "completed" ? (
+                  <Button
+                    variant={translation ? "outline" : "default"}
+                    onClick={handleTranslate}
+                    disabled={isTranslating || isTranslationActive}
+                  >
+                    <RefreshCw className="size-4" />
+                    {isTranslationActive
+                      ? "Translating..."
+                      : isTranslating
+                        ? "Queueing..."
+                        : translation
+                          ? "Retranslate to English"
+                          : "Translate to English"}
+                  </Button>
+                ) : null}
               </div>
             </div>
 
@@ -355,6 +451,11 @@ export default function UploadedMediaDetailPage() {
                 {retryFeedback}
               </div>
             ) : null}
+            {translationFeedback ? (
+              <div className="rounded-[12px] border border-border bg-secondary/60 px-4 py-3 text-sm text-foreground">
+                {translationFeedback}
+              </div>
+            ) : null}
           </AppPanel>
 
           <AppPanel className="grid content-start gap-4 px-5 py-5">
@@ -388,7 +489,7 @@ export default function UploadedMediaDetailPage() {
             {primaryAssetLinks.length ? (
               <div className="grid gap-3">
                 {primaryAssetLinks.map((asset) => (
-                  <TranscriptAssetLink key={asset.id} asset={asset} />
+                  <AssetLink key={asset.id} asset={asset} />
                 ))}
               </div>
             ) : (
@@ -472,6 +573,213 @@ export default function UploadedMediaDetailPage() {
                 </p>
               </div>
             </AppPanel>
+          )}
+        </section>
+
+        <section className="grid gap-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+                English translation
+              </h2>
+              <p className="text-[14px] leading-6 text-muted-foreground">
+                Generate and review an English transcript from the source file.
+              </p>
+            </div>
+            {translation ? (
+              <Badge variant={translationStatusVariant(translation.status)}>
+                {translationStatusLabel(translation.status)}
+              </Badge>
+            ) : null}
+          </div>
+
+          {!translation ? (
+            <AppPanel className="flex min-h-[220px] items-center justify-center px-6 py-10 text-center">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h3 className="font-display text-[30px] font-semibold tracking-[-0.04em] text-foreground">
+                    No translation yet
+                  </h3>
+                  <p className="max-w-[540px] text-[15px] leading-7 text-muted-foreground">
+                    Generate an English version of this transcript and export it as text, subtitles, or JSON.
+                  </p>
+                </div>
+                <Button onClick={handleTranslate} disabled={media.status !== "completed" || isTranslating}>
+                  <RefreshCw className="size-4" />
+                  {isTranslating ? "Queueing..." : "Translate to English"}
+                </Button>
+              </div>
+            </AppPanel>
+          ) : (
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_360px]">
+              <AppPanel className="grid gap-5 px-7 py-7">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+                        {translation.targetLanguage.toUpperCase()} transcript
+                      </h3>
+                      <Badge variant={translationStatusVariant(translation.status)}>
+                        {translationStatusLabel(translation.status)}
+                      </Badge>
+                    </div>
+                    <p className="text-[14px] text-muted-foreground">
+                      {formatInteger(translation.translatedWordCount)} words · {formatInteger(translation.segmentCount)} segments
+                      {translation.translatedAt ? ` · Updated ${formatRelativeDate(translation.translatedAt)}` : ""}
+                    </p>
+                  </div>
+                </div>
+
+                {isTranslationActive && translation.latestJob ? (
+                  <AppPanel className="grid gap-3 px-5 py-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[16px] font-medium text-foreground">
+                        {translation.status === "queued" ? "Queued for translation" : "Translating to English"}
+                      </p>
+                      <span className="font-display text-[28px] font-semibold tracking-[-0.04em] text-foreground">
+                        {translationPercent}%
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                      <div
+                        className="h-full rounded-full bg-primary transition-[width] duration-500"
+                        style={{ width: `${translationPercent}%` }}
+                      />
+                    </div>
+                    <p className="text-[14px] text-muted-foreground">
+                      {translation.latestJob.message ?? "The worker is translating the transcript."}
+                    </p>
+                  </AppPanel>
+                ) : null}
+
+                {translation.status === "failed" && translation.errorMessage ? (
+                  <AppPanel className="grid gap-4 border-destructive/20 bg-destructive/5 px-5 py-5">
+                    <div className="space-y-1">
+                      <p className="text-[15px] font-medium text-destructive">Translation failed</p>
+                      <p className="text-[14px] leading-6 text-destructive/90">{translation.errorMessage}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button onClick={handleTranslate} disabled={isTranslating}>
+                        <RefreshCw className="size-4" />
+                        {isTranslating ? "Retrying..." : "Retry translation"}
+                      </Button>
+                      <p className="text-[13px] text-muted-foreground">
+                        No re-upload needed. The worker will reuse the transcript that already exists.
+                      </p>
+                    </div>
+                  </AppPanel>
+                ) : null}
+
+                {translation.segments.length ? (
+                  <>
+                    <div className="grid w-full gap-3 sm:max-w-[420px]">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={translationSearchQuery}
+                          onChange={(event) => setTranslationSearchQuery(event.target.value)}
+                          placeholder="Search within this translation"
+                          className="pl-10 pr-11"
+                        />
+                        {translationSearchQuery ? (
+                          <button
+                            type="button"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-[8px] p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                            aria-label="Clear translation search"
+                            onClick={() => setTranslationSearchQuery("")}
+                          >
+                            <X className="size-4" />
+                          </button>
+                        ) : null}
+                      </div>
+                      <p className="text-[12px] text-muted-foreground">
+                        {translationSearchQuery.trim()
+                          ? `${formatInteger(filteredTranslationSegments.length)} matching segment${filteredTranslationSegments.length === 1 ? "" : "s"}`
+                          : `${formatInteger(translation.segments.length)} total segment${translation.segments.length === 1 ? "" : "s"}`}
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3">
+                      {filteredTranslationSegments.length ? (
+                        filteredTranslationSegments.map((segment) => (
+                          <div key={segment.id} className="grid gap-2 rounded-[10px] border border-border px-4 py-3">
+                            <div className="flex items-center gap-3 text-[12px] font-medium text-primary">
+                              <span>{segment.timestampLabel}</span>
+                              <span className="text-muted-foreground">{formatInteger(segment.wordCount)} words</span>
+                            </div>
+                            <p className="text-[15px] leading-7 text-foreground">
+                              <HighlightedTranscript text={segment.text} query={translationSearchQuery} />
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <EmptyState
+                          title="No translation matches"
+                          description="Try a different phrase or clear the search to return to the full translation."
+                        />
+                      )}
+                    </div>
+                  </>
+                ) : translation.status === "completed" ? (
+                  <EmptyState
+                    title="Translation unavailable"
+                    description="The job finished, but no translated segments were saved for this file."
+                  />
+                ) : (
+                  <AppPanel className="flex min-h-[220px] items-center justify-center px-6 py-10 text-center">
+                    <div className="space-y-2">
+                      <h3 className="font-display text-[30px] font-semibold tracking-[-0.04em] text-foreground">
+                        Waiting on translation
+                      </h3>
+                      <p className="max-w-[520px] text-[15px] leading-7 text-muted-foreground">
+                        Once the worker finishes, the English transcript and subtitle exports will render here automatically.
+                      </p>
+                    </div>
+                  </AppPanel>
+                )}
+              </AppPanel>
+
+              <AppPanel className="grid content-start gap-4 px-5 py-5">
+                <div>
+                  <p className="text-[12px] uppercase tracking-[0.08em] text-muted-foreground">Translation exports</p>
+                  <p className="mt-1 text-[14px] leading-6 text-muted-foreground">
+                    Download the English transcript in plain text, subtitles, or JSON.
+                  </p>
+                </div>
+                <div className="grid gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => copyTranslation("plain")}
+                    disabled={!translationText.trim() || isCopying}
+                  >
+                    {translationCopyState === "copied" ? <Check className="size-4" /> : <Copy className="size-4" />}
+                    {translationCopyState === "copied" ? "Copied translation" : "Copy translation"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => copyTranslation("timestamps")}
+                    disabled={!translationWithTimestamps.trim() || isCopying}
+                  >
+                    <Copy className="size-4" />
+                    Copy with timestamps
+                  </Button>
+                  {translationCopyState === "error" ? (
+                    <p className="text-[12px] text-destructive">
+                      Clipboard access failed. Download the TXT export instead.
+                    </p>
+                  ) : null}
+                </div>
+                {translation.assets.length ? (
+                  <div className="grid gap-3">
+                    {translation.assets.map((asset) => (
+                      <AssetLink key={asset.id} asset={asset} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Exports will appear here once translation completes.</p>
+                )}
+              </AppPanel>
+            </section>
           )}
         </section>
       </div>

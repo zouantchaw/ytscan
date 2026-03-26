@@ -409,6 +409,7 @@ export type UploadedMediaSummary = {
   language: string | null;
   transcriptWordCount: number;
   segmentCount: number;
+  translationCount: number;
   errorMessage: string | null;
   createdByUserId: string;
   createdAt: string;
@@ -419,10 +420,35 @@ export type UploadedMediaSummary = {
   latestJob: GenerationJobSummary | null;
 };
 
+export type UploadedMediaTranslationStatus =
+  | "queued"
+  | "translating"
+  | "completed"
+  | "failed";
+
+export type UploadedMediaTranslation = {
+  id: string;
+  sourceLanguage: string | null;
+  targetLanguage: string;
+  provider: string;
+  status: UploadedMediaTranslationStatus | string;
+  translatedText: string | null;
+  translatedWordCount: number;
+  segmentCount: number;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  translatedAt: string | null;
+  latestJob: GenerationJobSummary | null;
+  assets: GenerationAssetSummary[];
+  segments: UploadedMediaSegment[];
+};
+
 export type UploadedMediaDetail = UploadedMediaSummary & {
   transcriptText: string | null;
   transcriptAssets: GenerationAssetSummary[];
   segments: UploadedMediaSegment[];
+  translations: UploadedMediaTranslation[];
 };
 
 export type UploadedMediaListResponse = {

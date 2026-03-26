@@ -3,8 +3,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import {
+  buildSrt,
+  buildVtt,
+  chunkTranscriptSegments,
+  type TranscriptSegmentPayload,
+} from "../translation/helpers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MONOREPO_ROOT = path.resolve(__dirname, "../../../../");
@@ -26,6 +32,7 @@ const GEMINI_THUMBNAIL_IMAGE_MODEL =
   process.env.GEMINI_THUMBNAIL_IMAGE_MODEL ||
   process.env.GEMINI_IMAGE_MODEL ||
   "gemini-3-pro-image-preview";
+const GEMINI_TRANSLATION_MODEL = process.env.GEMINI_TRANSLATION_MODEL || "gemini-2.5-flash";
 const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
 const GEMINI_TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Kore";
 const PREVIS_SCENE_DURATION_SECONDS = Number(process.env.PREVIS_SCENE_DURATION_SECONDS || "5");
@@ -106,22 +113,40 @@ type TranscriptionJobInput = {
   r2Key?: string | null;
 };
 
-type TranscriptSegmentPayload = {
-  segmentIndex: number;
-  startTime: number;
-  endTime: number;
-  text: string;
-};
-
 type ScenePlan = {
   caption: string;
   prompt: string;
   title: string;
 };
 
+type TranslationJobInput = {
+  mediaId?: string;
+  sourceLanguage?: string | null;
+  targetLanguage?: string | null;
+  translationId?: string;
+};
+
+type TranslationSourcePayload = {
+  media: {
+    id: string;
+    fileName: string;
+    language: string | null;
+    transcriptText: string;
+    transcriptWordCount: number;
+    durationSec: number | null;
+  };
+  translation: {
+    id: string;
+    sourceLanguage: string | null;
+    targetLanguage: string;
+    provider: string;
+  };
+  segments: TranscriptSegmentPayload[];
+};
+
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 const ENABLED_MEDIA_JOB_TYPES = ai
-  ? ["thumbnail_images", "previs", "transcription"]
+  ? ["thumbnail_images", "previs", "transcription", "translation"]
   : ["transcription"];
 const ENABLED_MEDIA_PROVIDERS = ai ? ["gemini", "internal"] : ["internal"];
 
@@ -372,6 +397,46 @@ async function syncTranscriptResult(
   });
 }
 
+async function fetchTranslationSource(job: LeasedGenerationJob): Promise<TranslationSourcePayload> {
+  const headers = new Headers();
+  headers.set("x-internal-token", INTERNAL_RUNNER_TOKEN);
+  headers.set("x-generation-lease-token", job.leaseToken);
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/internal/generation-jobs/${job.id}/translation-source`,
+    {
+      method: "GET",
+      headers,
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Translation source fetch failed (${response.status} ${response.statusText}): ${await response.text()}`
+    );
+  }
+
+  return (await response.json()) as TranslationSourcePayload;
+}
+
+async function syncTranslationResult(
+  job: LeasedGenerationJob,
+  payload: {
+    segments: TranscriptSegmentPayload[];
+    sourceLanguage: string | null;
+    targetLanguage: string | null;
+    translatedText: string;
+  }
+): Promise<void> {
+  await apiJsonRequest(`/api/internal/generation-jobs/${job.id}/translation`, {
+    method: "POST",
+    body: JSON.stringify({
+      leaseToken: job.leaseToken,
+      ...payload,
+    }),
+  });
+}
+
 async function runPythonJson(command: string, args: string[], cwd = MONOREPO_ROOT): Promise<JsonObject> {
   return await new Promise<JsonObject>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -439,6 +504,137 @@ async function fetchReferenceImageParts(referenceImages: ReferenceImage[], limit
   }
 
   return parts;
+}
+
+function extractTextFromModelResponse(response: unknown): string | null {
+  const payload = response as {
+    candidates?: Array<{
+      content?: { parts?: Array<{ text?: string }> };
+    }>;
+    text?: string;
+  };
+
+  const directText = typeof payload.text === "string" ? payload.text.trim() : "";
+  if (directText) return directText;
+
+  const candidateText = payload.candidates
+    ?.flatMap((candidate) => candidate.content?.parts ?? [])
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+
+  return candidateText || null;
+}
+
+const TRANSLATION_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    translatedText: { type: Type.STRING },
+    segments: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          segmentIndex: { type: Type.INTEGER },
+          text: { type: Type.STRING },
+        },
+        required: ["segmentIndex", "text"],
+      },
+    },
+  },
+  required: ["translatedText", "segments"],
+} as const;
+
+async function translateBatch(
+  batch: TranscriptSegmentPayload[],
+  sourceLanguage: string | null,
+  targetLanguage: string
+): Promise<{
+  translatedText: string;
+  segments: Array<{ segmentIndex: number; text: string }>;
+}> {
+  if (!ai) {
+    throw new Error("GEMINI_API_KEY is required for translation jobs.");
+  }
+
+  const prompt = [
+    `Translate the following transcript segments from ${sourceLanguage ?? "the source language"} to ${targetLanguage}.`,
+    "Return valid JSON that matches the schema exactly.",
+    "Rules:",
+    "- Preserve the original segmentIndex values.",
+    "- Return one translated segment for every input segment.",
+    "- Do not summarize or omit details.",
+    "- Keep the wording natural and spoken, suitable for subtitles/transcripts.",
+    "- Do not add commentary, labels, or markdown.",
+    "",
+    JSON.stringify({
+      segments: batch.map((segment) => ({
+        segmentIndex: segment.segmentIndex,
+        text: segment.text,
+      })),
+    }),
+  ].join("\n");
+
+  const response = await ai.models.generateContent({
+    model: GEMINI_TRANSLATION_MODEL,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: TRANSLATION_RESPONSE_SCHEMA,
+    },
+  });
+
+  const text = extractTextFromModelResponse(response);
+  if (!text) {
+    throw new Error("Gemini translation returned no JSON payload.");
+  }
+
+  let parsed: {
+    translatedText?: unknown;
+    segments?: Array<{ segmentIndex?: unknown; text?: unknown }>;
+  };
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Gemini translation returned invalid JSON: ${String(error)}`);
+  }
+
+  const translatedSegments = Array.isArray(parsed.segments)
+    ? parsed.segments
+        .map((segment) => {
+          const segmentIndex = Number(segment?.segmentIndex);
+          const translatedText = typeof segment?.text === "string" ? segment.text.trim() : "";
+          if (!Number.isFinite(segmentIndex) || !translatedText) {
+            return null;
+          }
+          return {
+            segmentIndex,
+            text: translatedText,
+          };
+        })
+        .filter((segment): segment is { segmentIndex: number; text: string } => Boolean(segment))
+    : [];
+
+  const batchByIndex = new Map(batch.map((segment) => [segment.segmentIndex, segment]));
+  if (translatedSegments.length !== batch.length) {
+    throw new Error("Gemini translation returned a mismatched segment count.");
+  }
+
+  for (const segment of translatedSegments) {
+    if (!batchByIndex.has(segment.segmentIndex)) {
+      throw new Error("Gemini translation returned an unexpected segment index.");
+    }
+  }
+
+  const translatedText =
+    typeof parsed.translatedText === "string" && parsed.translatedText.trim()
+      ? parsed.translatedText.trim()
+      : translatedSegments.map((segment) => segment.text).join(" ");
+
+  return {
+    translatedText,
+    segments: translatedSegments.sort((left, right) => left.segmentIndex - right.segmentIndex),
+  };
 }
 
 function extractConceptSections(briefContent: string): Array<{ title: string; body: string }> {
@@ -955,6 +1151,157 @@ async function handleTranscription(job: LeasedGenerationJob): Promise<JsonObject
   };
 }
 
+async function handleTranslation(job: LeasedGenerationJob): Promise<JsonObject> {
+  const input = job.input as TranslationJobInput;
+  const outputDir = path.join(GENERATED_MEDIA_ROOT, job.id);
+  ensureDir(outputDir);
+
+  await patchJob(job, {
+    stage: "loading_source",
+    progress: 0.05,
+    message: "Loading transcript for translation",
+  });
+
+  const source = await fetchTranslationSource(job);
+  const sourceLanguage = source.translation.sourceLanguage ?? source.media.language ?? input.sourceLanguage ?? null;
+  const targetLanguage = source.translation.targetLanguage || input.targetLanguage || "en";
+
+  const batches = chunkTranscriptSegments(source.segments);
+  if (batches.length === 0) {
+    throw new Error("No transcript segments are available for translation.");
+  }
+
+  const translatedSegments: TranscriptSegmentPayload[] = [];
+  const translatedBatchTexts: string[] = [];
+
+  await patchJob(job, {
+    stage: "translating",
+    progress: 0.12,
+    message: `Translating ${source.segments.length} segments`,
+  });
+
+  for (let index = 0; index < batches.length; index += 1) {
+    const batch = batches[index];
+    const translated = await translateBatch(batch.segments, sourceLanguage, targetLanguage);
+    const translatedByIndex = new Map(
+      translated.segments.map((segment) => [segment.segmentIndex, segment.text])
+    );
+
+    for (const original of batch.segments) {
+      const translatedText = translatedByIndex.get(original.segmentIndex);
+      if (!translatedText) {
+        throw new Error(`Missing translated text for segment ${original.segmentIndex}.`);
+      }
+      translatedSegments.push({
+        ...original,
+        text: translatedText,
+      });
+    }
+
+    translatedBatchTexts.push(translated.translatedText);
+
+    await patchJob(job, {
+      stage: "translating",
+      progress: Number((0.12 + ((index + 1) / batches.length) * 0.62).toFixed(3)),
+      message: `Translated batch ${index + 1} of ${batches.length}`,
+    });
+  }
+
+  const translatedText = translatedSegments.map((segment) => segment.text).join("\n").trim();
+  await syncTranslationResult(job, {
+    translatedText,
+    sourceLanguage,
+    targetLanguage,
+    segments: translatedSegments,
+  });
+
+  const normalizedTargetLanguage = targetLanguage.toLowerCase();
+  const artifactBaseName = `${sanitizeName(source.media.fileName.replace(/\.[^.]+$/, ""))}-${normalizedTargetLanguage}`;
+  const txtPath = path.join(outputDir, `${artifactBaseName}.txt`);
+  const srtPath = path.join(outputDir, `${artifactBaseName}.srt`);
+  const vttPath = path.join(outputDir, `${artifactBaseName}.vtt`);
+  const jsonPath = path.join(outputDir, `${artifactBaseName}.json`);
+
+  fs.writeFileSync(txtPath, `${translatedText}\n`, "utf8");
+  fs.writeFileSync(srtPath, `${buildSrt(translatedSegments)}\n`, "utf8");
+  fs.writeFileSync(vttPath, `${buildVtt(translatedSegments)}\n`, "utf8");
+  fs.writeFileSync(
+    jsonPath,
+    `${JSON.stringify(
+      {
+        media: source.media,
+        translation: {
+          id: source.translation.id,
+          sourceLanguage,
+          targetLanguage,
+        },
+        segments: translatedSegments,
+        translatedText,
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  await patchJob(job, {
+    stage: "packaging",
+    progress: 0.84,
+    message: "Uploading translated transcript files",
+  });
+
+  const assets: GenerationAsset[] = [];
+  for (const upload of [
+    {
+      assetKind: "translation_text",
+      fileName: path.basename(txtPath),
+      filePath: txtPath,
+      mimeType: "text/plain; charset=utf-8",
+    },
+    {
+      assetKind: "translation_srt",
+      fileName: path.basename(srtPath),
+      filePath: srtPath,
+      mimeType: "application/x-subrip",
+    },
+    {
+      assetKind: "translation_vtt",
+      fileName: path.basename(vttPath),
+      filePath: vttPath,
+      mimeType: "text/vtt; charset=utf-8",
+    },
+    {
+      assetKind: "translation_json",
+      fileName: path.basename(jsonPath),
+      filePath: jsonPath,
+      mimeType: "application/json; charset=utf-8",
+    },
+  ]) {
+    assets.push(
+      await uploadAsset(job, {
+        ...upload,
+        metadata: {
+          mediaId: source.media.id,
+          sourceLanguage,
+          targetLanguage,
+          translationId: source.translation.id,
+        },
+      })
+    );
+  }
+
+  return {
+    assetIds: assets.map((asset) => asset.id),
+    mediaId: source.media.id,
+    sourceLanguage,
+    targetLanguage,
+    translatedWordCount: translatedText ? translatedText.split(/\s+/).filter(Boolean).length : 0,
+    translationAssetIds: assets.map((asset) => asset.id),
+    translationId: source.translation.id,
+    segmentCount: translatedSegments.length,
+  };
+}
+
 async function withHeartbeat<T>(job: LeasedGenerationJob, work: () => Promise<T>): Promise<T> {
   const timer = setInterval(() => {
     void heartbeatJob(job).catch((error) => {
@@ -977,6 +1324,8 @@ async function processJob(job: LeasedGenerationJob): Promise<void> {
     switch (job.jobType) {
       case "transcription":
         return await handleTranscription(job);
+      case "translation":
+        return await handleTranslation(job);
       case "thumbnail_images":
         return await handleThumbnailImages(job);
       case "previs":

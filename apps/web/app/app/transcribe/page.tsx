@@ -59,7 +59,11 @@ function mediaStatusVariant(status: string): "secondary" | "success" | "destruct
 
 function mediaStatusDetail(media: UploadedMediaSummary) {
   if (media.status === "completed") {
-    return `${formatInteger(media.transcriptWordCount)} words · ${media.segmentCount} timestamped segments`;
+    const translationDetail =
+      media.translationCount > 0
+        ? ` · ${formatInteger(media.translationCount)} translation${media.translationCount === 1 ? "" : "s"}`
+        : "";
+    return `${formatInteger(media.transcriptWordCount)} words · ${media.segmentCount} timestamped segments${translationDetail}`;
   }
 
   if (media.status === "failed") {

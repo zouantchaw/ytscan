@@ -36,6 +36,7 @@ import type {
   UploadedMediaResponse,
   UploadedMediaSegment,
   UploadedMediaSummary,
+  UploadedMediaTranslation,
   VideoSummary,
   WorkspaceSummary,
 } from "@ytscan/core";
@@ -287,6 +288,7 @@ type UploadedMediaRow = {
   transcript_text: string | null;
   transcript_word_count: number;
   segment_count: number;
+  translation_count: number;
   error_message: string | null;
   uploaded_at: string | null;
   transcribed_at: string | null;
@@ -297,6 +299,36 @@ type UploadedMediaRow = {
 type UploadedMediaSegmentRow = {
   id: string;
   media_id: string;
+  segment_index: number;
+  start_time: number;
+  end_time: number;
+  text: string;
+  word_count: number;
+  created_at: string;
+};
+
+type UploadedMediaTranslationRow = {
+  id: string;
+  media_id: string;
+  workspace_id: string;
+  created_by_user_id: string;
+  latest_generation_job_id: string | null;
+  source_language: string | null;
+  target_language: string;
+  provider: string;
+  status: string;
+  translated_text: string | null;
+  translated_word_count: number;
+  segment_count: number;
+  error_message: string | null;
+  translated_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type UploadedMediaTranslationSegmentRow = {
+  id: string;
+  translation_id: string;
   segment_index: number;
   start_time: number;
   end_time: number;
@@ -727,6 +759,11 @@ const UPLOADED_MEDIA_SELECT = `
   transcript_text,
   transcript_word_count,
   segment_count,
+  (
+    SELECT COUNT(*)
+    FROM uploaded_media_translations
+    WHERE uploaded_media_translations.media_id = uploaded_media.id
+  ) AS translation_count,
   error_message,
   uploaded_at,
   transcribed_at,
@@ -737,6 +774,36 @@ const UPLOADED_MEDIA_SELECT = `
 const UPLOADED_MEDIA_SEGMENT_SELECT = `
   id,
   media_id,
+  segment_index,
+  start_time,
+  end_time,
+  text,
+  word_count,
+  created_at
+`;
+
+const UPLOADED_MEDIA_TRANSLATION_SELECT = `
+  id,
+  media_id,
+  workspace_id,
+  created_by_user_id,
+  latest_generation_job_id,
+  source_language,
+  target_language,
+  provider,
+  status,
+  translated_text,
+  translated_word_count,
+  segment_count,
+  error_message,
+  translated_at,
+  created_at,
+  updated_at
+`;
+
+const UPLOADED_MEDIA_TRANSLATION_SEGMENT_SELECT = `
+  id,
+  translation_id,
   segment_index,
   start_time,
   end_time,
@@ -1128,10 +1195,15 @@ async function handleInternalRoute(
       if (action === "fail") return failGenerationJob(jobId, request, env);
       if (action === "assets") return uploadGenerationAsset(jobId, request, env);
       if (action === "transcript") return syncGenerationJobTranscript(jobId, request, env);
+      if (action === "translation") return syncGenerationJobTranslation(jobId, request, env);
     }
 
     if (request.method === "GET" && action === "source") {
       return getGenerationJobSourceFile(jobId, request, env);
+    }
+
+    if (request.method === "GET" && action === "translation-source") {
+      return getGenerationJobTranslationSource(jobId, request, env);
     }
 
     return jsonResponse({ error: "Not found" }, 404);
@@ -1730,6 +1802,112 @@ async function fetchTranscriptAssetsForMedia(
   return results.map(toGenerationAssetSummary);
 }
 
+async function fetchGenerationJobById(
+  jobId: string,
+  workspaceId: string,
+  env: Env
+): Promise<GenerationJobRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT ${GENERATION_JOB_SELECT}
+        FROM generation_jobs
+        WHERE id = ? AND workspace_id = ?
+        LIMIT 1
+      `
+    )
+      .bind(jobId, workspaceId)
+      .first<GenerationJobRow>()) ?? null
+  );
+}
+
+async function fetchUploadedMediaTranslations(
+  mediaId: string,
+  workspaceId: string,
+  env: Env
+): Promise<UploadedMediaTranslationRow[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${UPLOADED_MEDIA_TRANSLATION_SELECT}
+      FROM uploaded_media_translations
+      WHERE media_id = ? AND workspace_id = ?
+      ORDER BY created_at DESC
+    `
+  )
+    .bind(mediaId, workspaceId)
+    .all<UploadedMediaTranslationRow>();
+
+  return results;
+}
+
+async function fetchUploadedMediaTranslation(
+  mediaId: string,
+  workspaceId: string,
+  targetLanguage: string,
+  env: Env
+): Promise<UploadedMediaTranslationRow | null> {
+  return (
+    (await env.DB.prepare(
+      `
+        SELECT ${UPLOADED_MEDIA_TRANSLATION_SELECT}
+        FROM uploaded_media_translations
+        WHERE media_id = ? AND workspace_id = ? AND target_language = ?
+        LIMIT 1
+      `
+    )
+      .bind(mediaId, workspaceId, targetLanguage)
+      .first<UploadedMediaTranslationRow>()) ?? null
+  );
+}
+
+async function fetchUploadedMediaTranslationSegments(
+  translationId: string,
+  env: Env
+): Promise<UploadedMediaSegment[]> {
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${UPLOADED_MEDIA_TRANSLATION_SEGMENT_SELECT}
+      FROM uploaded_media_translation_segments
+      WHERE translation_id = ?
+      ORDER BY segment_index ASC
+    `
+  )
+    .bind(translationId)
+    .all<UploadedMediaTranslationSegmentRow>();
+
+  return results.map((row) => ({
+    id: row.id,
+    segmentIndex: Number(row.segment_index ?? 0),
+    startTime: Number(row.start_time ?? 0),
+    endTime: Number(row.end_time ?? 0),
+    timestampLabel: buildTimestampLabel(Number(row.start_time ?? 0)),
+    text: row.text,
+    wordCount: Number(row.word_count ?? 0),
+  }));
+}
+
+async function fetchTranslationAssetsForTranslation(
+  translation: UploadedMediaTranslationRow,
+  env: Env
+): Promise<GenerationAssetSummary[]> {
+  if (!translation.latest_generation_job_id) {
+    return [];
+  }
+
+  const { results = [] } = await env.DB.prepare(
+    `
+      SELECT ${GENERATION_ASSET_SELECT}
+      FROM generation_assets
+      WHERE generation_job_id = ?
+      ORDER BY created_at ASC
+    `
+  )
+    .bind(translation.latest_generation_job_id)
+    .all<GenerationAssetRow>();
+
+  return results.map(toGenerationAssetSummary);
+}
+
 async function fetchUploadedMediaSegments(
   mediaId: string,
   env: Env
@@ -1790,6 +1968,60 @@ async function updateUploadedMediaStatusFromJob(
       `
     )
       .bind(now, now, job.uploaded_media_id, job.workspace_id)
+      .run();
+  }
+}
+
+async function updateUploadedMediaTranslationStatusFromJob(
+  job: InternalGenerationJobRow,
+  env: Env
+): Promise<void> {
+  if (job.job_type !== "translation" || !job.uploaded_media_id) return;
+
+  const input = parseJsonObject(job.input_json);
+  const translationId =
+    typeof input.translationId === "string" && input.translationId.trim()
+      ? input.translationId.trim()
+      : null;
+
+  if (!translationId) return;
+
+  const now = new Date().toISOString();
+  if (job.status === "running") {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media_translations
+        SET status = 'translating', error_message = NULL, updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(now, translationId, job.workspace_id)
+      .run();
+    return;
+  }
+
+  if (job.status === "failed") {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media_translations
+        SET status = 'failed', error_message = ?, updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(compactMessage(job.error_message ?? job.message), now, translationId, job.workspace_id)
+      .run();
+    return;
+  }
+
+  if (job.status === "completed") {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media_translations
+        SET status = 'completed', error_message = NULL, translated_at = COALESCE(translated_at, ?), updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(now, now, translationId, job.workspace_id)
       .run();
   }
 }
@@ -1866,6 +2098,155 @@ async function queueUploadedMediaTranscriptionJob(
   }
 
   return toGenerationJobSummary(row);
+}
+
+async function queueUploadedMediaTranslationJob(
+  media: UploadedMediaRow,
+  targetLanguage: string,
+  context: RequestContext,
+  env: Env
+): Promise<UploadedMediaTranslationRow> {
+  const normalizedTargetLanguage = targetLanguage.trim().toLowerCase();
+  let translation = await fetchUploadedMediaTranslation(
+    media.id,
+    media.workspace_id,
+    normalizedTargetLanguage,
+    env
+  );
+
+  if (translation?.latest_generation_job_id) {
+    const latestJob = await fetchGenerationJobById(
+      translation.latest_generation_job_id,
+      media.workspace_id,
+      env
+    );
+
+    if (latestJob && ["queued", "running"].includes(latestJob.status)) {
+      return translation;
+    }
+  }
+
+  const now = new Date().toISOString();
+  const translationId = translation?.id ?? crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  const input = {
+    mediaId: media.id,
+    translationId,
+    sourceLanguage: media.language,
+    targetLanguage: normalizedTargetLanguage,
+    transcriptWordCount: Number(media.transcript_word_count ?? 0),
+  };
+
+  if (!translation) {
+    await env.DB.prepare(
+      `
+        INSERT INTO uploaded_media_translations (
+          id,
+          media_id,
+          workspace_id,
+          created_by_user_id,
+          latest_generation_job_id,
+          source_language,
+          target_language,
+          provider,
+          status,
+          translated_text,
+          translated_word_count,
+          segment_count,
+          error_message,
+          translated_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'gemini', 'queued', NULL, 0, 0, NULL, NULL, ?, ?)
+      `
+    )
+      .bind(
+        translationId,
+        media.id,
+        media.workspace_id,
+        context.session.user.id,
+        jobId,
+        media.language,
+        normalizedTargetLanguage,
+        now,
+        now
+      )
+      .run();
+  } else {
+    await env.DB.prepare(
+      `
+        UPDATE uploaded_media_translations
+        SET
+          latest_generation_job_id = ?,
+          source_language = ?,
+          provider = 'gemini',
+          status = 'queued',
+          translated_text = NULL,
+          translated_word_count = 0,
+          segment_count = 0,
+          error_message = NULL,
+          translated_at = NULL,
+          updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `
+    )
+      .bind(jobId, media.language, now, translationId, media.workspace_id)
+      .run();
+
+    await env.DB.prepare(`DELETE FROM uploaded_media_translation_segments WHERE translation_id = ?`)
+      .bind(translationId)
+      .run();
+  }
+
+  await env.DB.prepare(
+    `
+      INSERT INTO generation_jobs (
+        id,
+        workspace_id,
+        project_id,
+        persona_model_id,
+        uploaded_media_id,
+        job_type,
+        provider,
+        provider_job_id,
+        status,
+        stage,
+        progress,
+        input_json,
+        output_json,
+        message,
+        error_message,
+        created_by_user_id,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, NULL, NULL, ?, 'translation', 'gemini', NULL, 'queued', 'queued', 0, ?, '{}', 'Queued for translation', NULL, ?, NULL, NULL, ?, ?)
+    `
+  )
+    .bind(
+      jobId,
+      media.workspace_id,
+      media.id,
+      JSON.stringify(input),
+      context.session.user.id,
+      now,
+      now
+    )
+    .run();
+
+  translation = await fetchUploadedMediaTranslation(
+    media.id,
+    media.workspace_id,
+    normalizedTargetLanguage,
+    env
+  );
+
+  if (!translation) {
+    throw new Error("Failed to queue translation job");
+  }
+
+  return translation;
 }
 
 async function syncPersonaModelFromGenerationJob(
@@ -2238,6 +2619,7 @@ async function patchGenerationJob(jobId: string, request: Request, env: Env): Pr
 
     if (!updated) return jsonResponse({ error: "Generation job not found" }, 404);
     await updateUploadedMediaStatusFromJob(updated, env);
+    await updateUploadedMediaTranslationStatusFromJob(updated, env);
     return jsonResponse({ job: { ...toGenerationJobSummary(updated), leaseToken } });
   } catch (error) {
     if (error instanceof Error && error.message === "Lease token mismatch") {
@@ -2298,6 +2680,7 @@ async function completeGenerationJob(
 
   const completed = await fetchInternalGenerationJob(jobId, env);
   await updateUploadedMediaStatusFromJob(completed ?? updated, env);
+  await updateUploadedMediaTranslationStatusFromJob(completed ?? updated, env);
   if ((completed ?? updated).job_type === "persona_train") {
     await syncPersonaModelFromGenerationJob(completed ?? updated, "ready", env);
   }
@@ -2357,6 +2740,7 @@ async function failGenerationJob(jobId: string, request: Request, env: Env): Pro
 
   const failed = await fetchInternalGenerationJob(jobId, env);
   await updateUploadedMediaStatusFromJob(failed ?? updated, env);
+  await updateUploadedMediaTranslationStatusFromJob(failed ?? updated, env);
   if ((failed ?? updated).job_type === "persona_train") {
     await syncPersonaModelFromGenerationJob(failed ?? updated, "failed", env);
   }
@@ -2493,6 +2877,157 @@ async function syncGenerationJobTranscript(
     ok: true,
     segmentCount: segments.length,
     transcriptWordCount: countWords(transcriptText),
+  });
+}
+
+async function syncGenerationJobTranslation(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const leaseToken = readCallbackLeaseToken(request, undefined, payload?.leaseToken);
+
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const job = await fetchInternalGenerationJob(jobId, env);
+  if (!job) return jsonResponse({ error: "Generation job not found" }, 404);
+  if (job.lease_token !== leaseToken) {
+    return jsonResponse({ error: "Lease token mismatch" }, 409);
+  }
+  if (job.job_type !== "translation" || !job.uploaded_media_id) {
+    return jsonResponse({ error: "Translation sync is only available for translation jobs" }, 400);
+  }
+
+  const input = parseJsonObject(job.input_json);
+  const translationId =
+    typeof input.translationId === "string" && input.translationId.trim()
+      ? input.translationId.trim()
+      : "";
+
+  if (!translationId) {
+    return jsonResponse({ error: "Translation record is unavailable" }, 400);
+  }
+
+  const translatedText =
+    typeof payload.translatedText === "string" ? payload.translatedText.trim() : "";
+  const sourceLanguage =
+    typeof payload.sourceLanguage === "string" && payload.sourceLanguage.trim()
+      ? payload.sourceLanguage.trim()
+      : typeof input.sourceLanguage === "string"
+        ? input.sourceLanguage
+        : null;
+  const targetLanguage =
+    typeof payload.targetLanguage === "string" && payload.targetLanguage.trim()
+      ? payload.targetLanguage.trim()
+      : typeof input.targetLanguage === "string"
+        ? input.targetLanguage
+        : null;
+  const rawSegments = Array.isArray(payload.segments) ? payload.segments : [];
+  const segments = rawSegments
+    .map((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const segment = value as Record<string, unknown>;
+      const text = typeof segment.text === "string" ? segment.text.trim() : "";
+      if (!text) return null;
+      const startTime = Number(segment.startTime ?? segment.start ?? 0);
+      const endTime = Number(segment.endTime ?? segment.end ?? startTime);
+      return {
+        id: crypto.randomUUID(),
+        segmentIndex:
+          segment.segmentIndex === undefined || segment.segmentIndex === null
+            ? index
+            : Number(segment.segmentIndex),
+        startTime: Number.isFinite(startTime) ? startTime : 0,
+        endTime: Number.isFinite(endTime) ? endTime : Number.isFinite(startTime) ? startTime : 0,
+        text,
+        wordCount: countWords(text),
+      };
+    })
+    .filter((segment): segment is NonNullable<typeof segment> => Boolean(segment));
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(`DELETE FROM uploaded_media_translation_segments WHERE translation_id = ?`)
+    .bind(translationId)
+    .run();
+
+  for (const segment of segments) {
+    await env.DB.prepare(
+      `
+        INSERT INTO uploaded_media_translation_segments (
+          id,
+          translation_id,
+          segment_index,
+          start_time,
+          end_time,
+          text,
+          word_count,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+      .bind(
+        segment.id,
+        translationId,
+        segment.segmentIndex,
+        segment.startTime,
+        segment.endTime,
+        segment.text,
+        segment.wordCount,
+        now
+      )
+      .run();
+  }
+
+  await env.DB.prepare(
+    `
+      UPDATE uploaded_media_translations
+      SET
+        source_language = ?,
+        target_language = COALESCE(?, target_language),
+        translated_text = ?,
+        translated_word_count = ?,
+        segment_count = ?,
+        error_message = NULL,
+        updated_at = ?
+      WHERE id = ? AND workspace_id = ?
+    `
+  )
+    .bind(
+      sourceLanguage,
+      targetLanguage,
+      translatedText,
+      countWords(translatedText),
+      segments.length,
+      now,
+      translationId,
+      job.workspace_id
+    )
+    .run();
+
+  await recordGenerationJobEvent(
+    job.id,
+    {
+      message: `Stored translation (${segments.length} segments)`,
+      progress: job.progress,
+      stage: job.stage,
+      status: job.status,
+    },
+    {
+      translationId,
+      segmentCount: segments.length,
+      translatedWordCount: countWords(translatedText),
+      targetLanguage,
+    },
+    env
+  );
+
+  return jsonResponse({
+    ok: true,
+    segmentCount: segments.length,
+    translatedWordCount: countWords(translatedText),
   });
 }
 
@@ -2714,6 +3249,85 @@ async function getGenerationJobSourceFile(
   return new Response(object.body, {
     headers,
     status: 200,
+  });
+}
+
+async function getGenerationJobTranslationSource(
+  jobId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const url = new URL(request.url);
+  const leaseToken = readCallbackLeaseToken(request, url.searchParams);
+  if (!leaseToken) {
+    return jsonResponse({ error: "leaseToken is required" }, 400);
+  }
+
+  const job = await fetchCallbackGenerationJob(jobId, leaseToken, env);
+  if (!job) {
+    return jsonResponse({ error: "Generation job not found" }, 404);
+  }
+
+  if (job.job_type !== "translation" || !job.uploaded_media_id) {
+    return jsonResponse({ error: "Translation source is only available for translation jobs" }, 400);
+  }
+
+  const input = parseJsonObject(job.input_json);
+  const translationId =
+    typeof input.translationId === "string" && input.translationId.trim()
+      ? input.translationId.trim()
+      : "";
+  const targetLanguage =
+    typeof input.targetLanguage === "string" && input.targetLanguage.trim()
+      ? input.targetLanguage.trim()
+      : "en";
+
+  if (!translationId) {
+    return jsonResponse({ error: "Translation record is unavailable" }, 400);
+  }
+
+  const media = await fetchUploadedMediaRow(job.uploaded_media_id, job.workspace_id, env);
+  if (!media) {
+    return jsonResponse({ error: "Source media not found" }, 404);
+  }
+
+  const translation = await env.DB.prepare(
+    `
+      SELECT ${UPLOADED_MEDIA_TRANSLATION_SELECT}
+      FROM uploaded_media_translations
+      WHERE id = ? AND media_id = ? AND workspace_id = ?
+      LIMIT 1
+    `
+  )
+    .bind(translationId, job.uploaded_media_id, job.workspace_id)
+    .first<UploadedMediaTranslationRow>();
+
+  if (!translation) {
+    return jsonResponse({ error: "Translation record not found" }, 404);
+  }
+
+  const segments = await fetchUploadedMediaSegments(job.uploaded_media_id, env);
+  if (segments.length === 0 || !media.transcript_text?.trim()) {
+    return jsonResponse({ error: "Transcript is not available for translation yet" }, 409);
+  }
+
+  return jsonResponse({
+    media: {
+      id: media.id,
+      fileName: media.file_name,
+      language: media.language,
+      transcriptText: media.transcript_text,
+      transcriptWordCount: Number(media.transcript_word_count ?? 0),
+      durationSec:
+        media.duration_sec === null || media.duration_sec === undefined ? null : Number(media.duration_sec),
+    },
+    translation: {
+      id: translation.id,
+      sourceLanguage: translation.source_language ?? media.language,
+      targetLanguage: translation.target_language || targetLanguage,
+      provider: translation.provider,
+    },
+    segments,
   });
 }
 
@@ -4128,6 +4742,10 @@ async function handleUploadedMediaRoute(
     return retryUploadedMediaTranscription(mediaId, context, env);
   }
 
+  if (parts[3] === "translate" && request.method === "POST") {
+    return retryUploadedMediaTranslation(mediaId, request, context, env);
+  }
+
   if (parts[3] === "file" && request.method === "GET") {
     return getUploadedMediaSourceFile(mediaId, context, env);
   }
@@ -4329,18 +4947,39 @@ async function getUploadedMedia(
   const row = await fetchUploadedMediaRow(mediaId, context.workspace.id, env);
   if (!row) return jsonResponse({ error: "Media item not found" }, 404);
 
-  const [latestJob, transcriptAssets, segments] = await Promise.all([
+  const [latestJob, transcriptAssets, segments, translations] = await Promise.all([
     fetchLatestUploadedMediaJob(mediaId, context.workspace.id, env),
     fetchTranscriptAssetsForMedia(mediaId, context.workspace.id, env),
     fetchUploadedMediaSegments(mediaId, env),
+    fetchUploadedMediaTranslations(mediaId, context.workspace.id, env),
   ]);
+
+  const hydratedTranslations = await Promise.all(
+    translations.map(async (translation) => {
+      const [assets, segments] = await Promise.all([
+        fetchTranslationAssetsForTranslation(translation, env),
+        fetchUploadedMediaTranslationSegments(translation.id, env),
+      ]);
+      const latestTranslationJob = translation.latest_generation_job_id
+        ? await fetchGenerationJobById(translation.latest_generation_job_id, context.workspace.id, env)
+        : null;
+
+      return toUploadedMediaTranslation(
+        translation,
+        latestTranslationJob ? toGenerationJobSummary(latestTranslationJob) : null,
+        assets,
+        segments
+      );
+    })
+  );
 
   const response: UploadedMediaResponse = {
     media: toUploadedMediaDetail(
       row,
       latestJob ? toGenerationJobSummary(latestJob) : null,
       transcriptAssets,
-      segments
+      segments,
+      hydratedTranslations
     ),
   };
 
@@ -4359,6 +4998,32 @@ async function retryUploadedMediaTranscription(
   }
 
   await queueUploadedMediaTranscriptionJob(row, env);
+  return getUploadedMedia(mediaId, context, env);
+}
+
+async function retryUploadedMediaTranslation(
+  mediaId: string,
+  request: Request,
+  context: RequestContext,
+  env: Env
+): Promise<Response> {
+  const row = await fetchUploadedMediaRow(mediaId, context.workspace.id, env);
+  if (!row) return jsonResponse({ error: "Media item not found" }, 404);
+  if (!row.transcript_text?.trim() || Number(row.segment_count ?? 0) <= 0) {
+    return jsonResponse({ error: "Transcript must complete before translation can start" }, 409);
+  }
+
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const targetLanguage =
+    typeof payload.targetLanguage === "string" && payload.targetLanguage.trim()
+      ? payload.targetLanguage.trim().toLowerCase()
+      : "en";
+
+  if (!/^[a-z]{2}(-[a-z]{2})?$/iu.test(targetLanguage)) {
+    return jsonResponse({ error: "targetLanguage must be a language code like 'en' or 'en-us'" }, 400);
+  }
+
+  await queueUploadedMediaTranslationJob(row, targetLanguage, context, env);
   return getUploadedMedia(mediaId, context, env);
 }
 
@@ -4485,7 +5150,7 @@ async function uploadMediaFile(
 
   const latestJob = await queueUploadedMediaTranscriptionJob(updated, env);
   const response: UploadedMediaResponse = {
-    media: toUploadedMediaDetail(updated, latestJob, [], []),
+    media: toUploadedMediaDetail(updated, latestJob, [], [], []),
   };
 
   return jsonResponse(response, 201);
@@ -5086,6 +5751,7 @@ function toUploadedMediaSummary(
     language: row.language,
     transcriptWordCount: Number(row.transcript_word_count ?? 0),
     segmentCount: Number(row.segment_count ?? 0),
+    translationCount: Number(row.translation_count ?? 0),
     errorMessage: row.error_message,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
@@ -5101,12 +5767,39 @@ function toUploadedMediaDetail(
   row: UploadedMediaRow,
   latestJob: GenerationJobSummary | null,
   transcriptAssets: GenerationAssetSummary[],
-  segments: UploadedMediaSegment[]
+  segments: UploadedMediaSegment[],
+  translations: UploadedMediaTranslation[]
 ): UploadedMediaDetail {
   return {
     ...toUploadedMediaSummary(row, latestJob),
     transcriptText: row.transcript_text,
     transcriptAssets,
+    segments,
+    translations,
+  };
+}
+
+function toUploadedMediaTranslation(
+  row: UploadedMediaTranslationRow,
+  latestJob: GenerationJobSummary | null,
+  assets: GenerationAssetSummary[],
+  segments: UploadedMediaSegment[]
+): UploadedMediaTranslation {
+  return {
+    id: row.id,
+    sourceLanguage: row.source_language,
+    targetLanguage: row.target_language,
+    provider: row.provider,
+    status: row.status,
+    translatedText: row.translated_text,
+    translatedWordCount: Number(row.translated_word_count ?? 0),
+    segmentCount: Number(row.segment_count ?? 0),
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    translatedAt: row.translated_at,
+    latestJob,
+    assets,
     segments,
   };
 }
