@@ -118,10 +118,14 @@ function WorkspaceSummaryCard({
       : "No imported channels yet";
 
   return (
-    <div className="flex w-full items-center gap-3 rounded-[12px] border border-border bg-card px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(26_26_24_/_0.04)]">
-      <ChannelAvatar channelName={workspaceName} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[14px] font-medium text-foreground">{workspaceName}</p>
+    <div className="flex w-full max-w-full items-center gap-3 overflow-hidden rounded-[12px] border border-border bg-card px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(26_26_24_/_0.04)]">
+      <div className="shrink-0">
+        <ChannelAvatar channelName={workspaceName} />
+      </div>
+      <div className="min-w-0 flex-1 overflow-hidden">
+        <p className="truncate text-[14px] font-medium text-foreground" title={workspaceName}>
+          {workspaceName}
+        </p>
         <p className="truncate text-[12px] text-muted-foreground">{meta}</p>
       </div>
     </div>
@@ -141,11 +145,11 @@ function SidebarContent({
   const bottomItems = sidebarItems.filter((item) => item.bottom);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-5">
+    <div className="flex h-full min-h-0 max-w-full flex-col gap-5 overflow-hidden">
       <div className="grid shrink-0 gap-5">
         <AppLogo href="/app/archive" size="sm" />
         <WorkspaceSummaryCard workspaceName={workspaceName} channelCount={channels.length} />
-        <Button asChild className="justify-start">
+        <Button asChild className="w-full justify-start">
           <Link href="/app/import">
             <Plus className="size-4" />
             Import Content
@@ -241,7 +245,7 @@ export function AuthenticatedAppShell({
 
   return (
     <div className="min-h-screen bg-background lg:flex">
-      <aside className="hidden w-60 shrink-0 border-r border-separator bg-background px-4 py-4 lg:sticky lg:top-0 lg:flex lg:h-[100dvh] lg:flex-col">
+      <aside className="hidden w-72 shrink-0 border-r border-separator bg-background px-4 py-4 lg:sticky lg:top-0 lg:flex lg:h-[100dvh] lg:flex-col xl:w-[18.5rem]">
         <SidebarContent
           pathname={pathname}
           channels={items}
